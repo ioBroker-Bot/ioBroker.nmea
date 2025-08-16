@@ -29,6 +29,8 @@ if (process.argv.includes('--copy-files')) {
     buildReact(`${__dirname}/src-widgets`, { rootDir: __dirname, vite: true }).catch(() =>
         console.error('Error by build'),
     );
+} else if (process.argv.includes('--copy-i18n')) {
+    copyFiles(['src/i18n/**/*'], 'build/i18n/');
 } else {
     deleteFoldersRecursive('src-widgets/build');
     deleteFoldersRecursive('widgets');

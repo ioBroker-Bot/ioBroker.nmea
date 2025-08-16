@@ -27,7 +27,7 @@ import NGT1 from './lib/ngt1';
 import PicanM from './lib/picanM';
 import type { GenericDriver } from './lib/genericDriver';
 
-const PGNS: PGNType = JSON.parse(readFileSync(require.resolve('@canboat/pgns/canboat.json'), 'utf8'));
+const PGNS: PGNType = JSON.parse(readFileSync(require.resolve('@canboat/ts-pgns/canboat.json'), 'utf8'));
 
 const WELL_KNOWN_AIS_GROUPS = [
     'aisClassAPositionReport',

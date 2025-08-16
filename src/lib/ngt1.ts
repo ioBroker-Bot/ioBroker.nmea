@@ -1,6 +1,5 @@
 import { Transform } from 'node:stream';
-// @ts-expect-error no types
-import SerialPort from '@canboat/canboatjs/lib/serial';
+import { serial as SerialPort } from '@canboat/canboatjs';
 import { FromPgn } from '@canboat/canboatjs';
 import { type NmeaConfig, type PGNMessage, type WritePgnData } from '../types';
 import { GenericDriver } from './genericDriver';
@@ -9,7 +8,7 @@ import type { PGN } from '@canboat/ts-pgns';
 export default class NGT1 extends GenericDriver {
     private readonly serialPort: string;
 
-    private serial: SerialPort;
+    private serial: any | null;
 
     private readonly pgnErrors: Record<string, boolean>;
 
@@ -43,7 +42,7 @@ export default class NGT1 extends GenericDriver {
             this.adapter.log.warn(`${pgn.pgn} ${warning}`);
         });
 
-        this.serial = new SerialPort({
+        this.serial = SerialPort({
             app: this.app,
             device: this.serialPort,
             plainText: true,
@@ -73,10 +72,10 @@ export default class NGT1 extends GenericDriver {
             },
         });
 
-        this.serial.pipe(toStringTr);
+        this.serial!.pipe(toStringTr);
     }
 
-    write(data: WritePgnData): void {
+    write(data: string): void {
         this.adapter.log.debug(`Sending ${JSON.stringify(data)} to NGT1`);
         this.app?.emit('nmea2000out', data);
     }

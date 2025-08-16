@@ -23,7 +23,7 @@ export abstract class GenericDriver {
 
     abstract start(): void;
 
-    abstract write(data: WritePgnData): void;
+    abstract write(data: string | WritePgnData): void;
 
     abstract stop(): void;
 }

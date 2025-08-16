@@ -1,6 +1,5 @@
 import { Transform } from 'node:stream';
-// @ts-expect-error no types
-import CanPort from '@canboat/canboatjs/lib/canbus';
+import { canbus as CanPort } from '@canboat/canboatjs';
 import { FromPgn } from '@canboat/canboatjs';
 import { type NmeaConfig, type PGNMessage, type WritePgnData } from '../types';
 import { GenericDriver } from './genericDriver';
@@ -11,7 +10,7 @@ export default class PicanM extends GenericDriver {
 
     private readonly pgnErrors: Record<string, boolean>;
 
-    private serial: CanPort;
+    private serial: any | null;
 
     constructor(adapter: ioBroker.Adapter, settings: NmeaConfig, onData: (event: PGN) => void) {
         super(adapter, settings, onData);
@@ -27,7 +26,7 @@ export default class PicanM extends GenericDriver {
             }
         };
 
-        this.app.setProviderError = (id: string, msg: string) => {
+        this.app.setProviderError = (id: string, msg: string): void => {
             this.adapter.log.error(`PICAN-M: ${msg}`);
         };
     }
@@ -43,7 +42,7 @@ export default class PicanM extends GenericDriver {
             this.adapter.log.warn(`${pgn.pgn} ${warning}`);
         });
 
-        this.serial = new CanPort({
+        this.serial = CanPort({
             app: this.app,
             device: this.canPort,
             plainText: true,
@@ -75,13 +74,13 @@ export default class PicanM extends GenericDriver {
         this.serial.pipe(toStringTr);
     }
 
-    write(data: WritePgnData): void {
+    write(data: string): void {
         this.adapter.log.debug(`Sending ${typeof data === 'object' ? JSON.stringify(data) : data} to PicanM`);
-        this.app && this.app.emit('nmea2000out', data);
+        this.app?.emit('nmea2000out', data);
     }
 
     stop(): void {
-        this.app.removeAllListeners();
-        this.serial && this.serial.end();
+        this.app?.removeAllListeners();
+        this.serial?.end();
     }
 }

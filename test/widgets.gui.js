@@ -1,12 +1,12 @@
 const helper = require('@iobroker/vis-2-widgets-testing');
 const adapterName = require('../package.json').name.split('.').pop();
 
-describe('nmea widgets', () => {
+describe.only('nmea widgets', () => {
     before(async function () {
         this.timeout(180000);
         // install js-controller, web and vis-2-beta
-        await helper.startIoBroker();
-        await helper.startBrowser(process.env.CI === 'true' ? 'new' : false);
+        await helper.startIoBroker({ startOwnAdapter: true });
+        await helper.startBrowser(process.env.CI === 'true');
         await helper.createProject();
 
         // open widgets
@@ -22,12 +22,13 @@ describe('nmea widgets', () => {
             await helper.screenshot(null, `10_${widgets[w]}`);
             await helper.view.deleteWidget(null, wid);
         }
-        return Promise.resolve();
     });
 
     after(async function () {
         this.timeout(5000);
         await helper.stopBrowser();
-        return helper.stopIoBroker();
+        console.log('BROWSER stopped');
+        await helper.stopIoBroker();
+        console.log('ioBroker stopped');
     });
 });

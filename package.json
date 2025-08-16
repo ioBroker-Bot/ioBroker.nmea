@@ -56,7 +56,7 @@
         "lint": "eslint -c eslint.config.mjs && cd src-widgets && npm run lint",
         "build": "npm run build:ts && npm run build:gui",
         "build:gui": "node tasks",
-        "build:ts": "tsc -p tsconfig.build.json"
+        "build:ts": "tsc -p tsconfig.build.json && node tasks --copy-i18n"
     },
     "engines": {
         "node": ">=16"

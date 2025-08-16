@@ -1,5 +1,4 @@
-// @ts-expect-error no types
-import { encodeActisense } from '@canboat/canboatjs/lib/stringMsg';
+import { encodeActisense } from '@canboat/canboatjs/dist/stringMsg';
 import type { NmeaConfig } from '../types';
 import type { GenericDriver } from './genericDriver';
 import AutoPilot from './autoPilot';

@@ -1,5 +1,4 @@
-// @ts-expect-error no types
-import { encodeActisense } from '@canboat/canboatjs/lib/stringMsg';
+import { encodeActisense } from '@canboat/canboatjs/dist/stringMsg';
 import type { NmeaConfig, WritePgnData } from '../types';
 import type { GenericDriver } from './genericDriver';
 import AutoPilot from './autoPilot';
@@ -166,7 +165,7 @@ export default class NavicoAutoPilot extends AutoPilot {
     }
 
     private setHeadingAngle(command: 1 | -1 | 10 | -10): void {
-        let data: WritePgnData;
+        let data: string;
         if (command === 1) {
             data = encodeActisense({
                 prio: 2,
