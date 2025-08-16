@@ -7,8 +7,11 @@ For more details and for information how to disable the error reporting, see [Se
 Sentry reporting is used starting with js-controller 3.0.
 
 To use this adapter, you need a hardware that can read NMEA-2000 bus and convert it to the serial port:
-- Actisense NGT-1 (USB)
-- or Raspberry PI with PiCAN-M
+- [Actisense NGT-1 (USB)](https://actisense.com/products/ngt-1-nmea-2000-to-pc-interface/)
+- [Actisense NGX1-USB (USB)](https://actisense.com/products/nmea-2000-gateway-ngx-1/)
+- or [Raspberry PI with PiCAN-M](https://www.skpang.co.uk/collections/hats/products/copy-of-pican-m-with-can-bus-micro-c-and-rs422-connector-no-smps)
+
+PiCAN-M could work with Raspberry 4 and [5](https://copperhilltech.com/blog/testing-pican-can-bus-hats-with-the-raspberry-pi-5/).
 
 ![Widgets](img/widgetExamples.png)
 
