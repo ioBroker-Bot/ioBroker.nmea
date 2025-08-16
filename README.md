@@ -76,6 +76,11 @@ For this the according option must be enabled in the adapter settings and allowe
 iobroker ALL=(ALL) timedatectl set-timezone
 ```
 
+## Autopilot
+Actually, only one autopilot is supported: Raymarine
+
+The development of Simrad/navico/B&G is not completed yet.
+
 <!--
 	### **WORK IN PROGRESS**
 -->
@@ -83,6 +88,7 @@ iobroker ALL=(ALL) timedatectl set-timezone
 ### **WORK IN PROGRESS**
 * (bluefox) Widgets were rewritten on TypeScript
 * (bluefox) Corrected errors in the widgets and in the calculations
+* (bluefox) Small fix for ais data
 
 ### 0.2.2 (2024-06-20)
 * (bluefox) Backend was rewritten on TypeScript

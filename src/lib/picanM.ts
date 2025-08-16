@@ -1,19 +1,19 @@
 import { Transform } from 'node:stream';
 // @ts-expect-error no types
 import CanPort from '@canboat/canboatjs/lib/canbus';
-// @ts-expect-error no types
 import { FromPgn } from '@canboat/canboatjs';
-import { type NmeaConfig, type PgnDataEvent, type PGNMessage, type WritePgnData } from '../types';
+import { type NmeaConfig, type PGNMessage, type WritePgnData } from '../types';
 import { GenericDriver } from './genericDriver';
+import type { PGN } from '@canboat/ts-pgns';
 
-class PicanM extends GenericDriver {
+export default class PicanM extends GenericDriver {
     private readonly canPort: string;
 
     private readonly pgnErrors: Record<string, boolean>;
 
     private serial: CanPort;
 
-    constructor(adapter: ioBroker.Adapter, settings: NmeaConfig, onData: (event: PgnDataEvent) => void) {
+    constructor(adapter: ioBroker.Adapter, settings: NmeaConfig, onData: (event: PGN) => void) {
         super(adapter, settings, onData);
         this.canPort = settings.canPort;
         this.serial = null;
@@ -61,8 +61,8 @@ class PicanM extends GenericDriver {
                 // console.log(chunk.toString());
                 try {
                     const json = parser.parseString(chunk.toString());
-                    if (json && json.fields) {
-                        onData && onData(json);
+                    if (json?.fields) {
+                        onData?.(json);
                     }
                 } catch (error) {
                     adapter.log.error(`Cannot parse NMEA message: ${error}`);
@@ -85,5 +85,3 @@ class PicanM extends GenericDriver {
         this.serial && this.serial.end();
     }
 }
-
-export default PicanM;

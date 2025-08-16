@@ -20,9 +20,9 @@ export default [
         },
     },
     {
-        ignores: ['*.mjs', 'test/**/*.*', 'admin/**/*.*', 'dist/**/*.*'],
+        ignores: ['*.mjs', 'test/**/*.*', 'admin/**/*.*', 'build/**/*.*', 'widgets/**/*.*', 'src-widgets/**/*.*'],
     },
     {
-        files: ['lib/*.js', '*.js'], // Hier werden die gewünschten Dateien angegeben
+        files: ['src/lib/*.ts', 'src/*.ts'],
     },
 ];

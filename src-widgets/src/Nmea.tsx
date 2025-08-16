@@ -182,7 +182,7 @@ const InstanceField = (props: {
     const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
 
     useEffect(() => {
-        (async () => {
+        void (async () => {
             const _instances: {
                 value: `nmea.${string}`;
                 label: `nmea.${string}`;

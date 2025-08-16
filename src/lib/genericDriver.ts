@@ -1,6 +1,7 @@
 import EventEmitter from 'node:events';
 
-import type { NmeaConfig, PgnDataEvent, WritePgnData } from '../types';
+import type { NmeaConfig, WritePgnData } from '../types';
+import type { PGN } from '@canboat/ts-pgns';
 
 interface ExtendedEmitter extends EventEmitter {
     setProviderStatus: (id: string, msg: string) => void;
@@ -10,11 +11,11 @@ interface ExtendedEmitter extends EventEmitter {
 export abstract class GenericDriver {
     protected readonly adapter: ioBroker.Adapter;
 
-    protected readonly onData: (event: PgnDataEvent) => void;
+    protected readonly onData: (event: PGN) => void;
 
     protected readonly app: ExtendedEmitter;
 
-    protected constructor(adapter: ioBroker.Adapter, settings: NmeaConfig, onData: (event: PgnDataEvent) => void) {
+    protected constructor(adapter: ioBroker.Adapter, settings: NmeaConfig, onData: (event: PGN) => void) {
         this.adapter = adapter;
         this.onData = onData;
         this.app = new EventEmitter() as ExtendedEmitter;

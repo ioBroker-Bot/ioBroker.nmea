@@ -23,7 +23,7 @@ import {
 import { Add, Clear, Close, ExpandLess, ExpandMore, Search } from '@mui/icons-material';
 
 import type { IobTheme } from '@iobroker/adapter-react-v5';
-import type { RxWidgetInfoCustomComponentContext, VisContext } from '@iobroker/types-vis-2';
+import type { RxWidgetInfoCustomComponentContext } from '@iobroker/types-vis-2';
 
 import Generic from '../Generic';
 

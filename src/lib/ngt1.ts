@@ -1,19 +1,19 @@
 import { Transform } from 'node:stream';
 // @ts-expect-error no types
 import SerialPort from '@canboat/canboatjs/lib/serial';
-// @ts-expect-error no types
 import { FromPgn } from '@canboat/canboatjs';
-import { type NmeaConfig, type PgnDataEvent, type PGNMessage, type WritePgnData } from '../types';
+import { type NmeaConfig, type PGNMessage, type WritePgnData } from '../types';
 import { GenericDriver } from './genericDriver';
+import type { PGN } from '@canboat/ts-pgns';
 
-class NGT1 extends GenericDriver {
+export default class NGT1 extends GenericDriver {
     private readonly serialPort: string;
 
     private serial: SerialPort;
 
     private readonly pgnErrors: Record<string, boolean>;
 
-    constructor(adapter: ioBroker.Adapter, settings: NmeaConfig, onData: (event: PgnDataEvent) => void) {
+    constructor(adapter: ioBroker.Adapter, settings: NmeaConfig, onData: (event: PGN) => void) {
         super(adapter, settings, onData);
         this.serialPort = settings.serialPort;
         this.serial = null;
@@ -58,11 +58,12 @@ class NGT1 extends GenericDriver {
             objectMode: true,
 
             transform(chunk, encoding, callback) {
-                // console.log(chunk.toString());
                 try {
                     const json = parser.parseString(chunk.toString());
-                    if (json && json.fields) {
-                        onData && onData(json);
+                    if (json?.fields) {
+                        onData?.(json);
+                    } else {
+                        // console.log(chunk.toString());
                     }
                 } catch (error) {
                     adapter.log.error(`Cannot parse NMEA message: ${error}`);
@@ -85,5 +86,3 @@ class NGT1 extends GenericDriver {
         this.app?.removeAllListeners();
     }
 }
-
-export default NGT1;

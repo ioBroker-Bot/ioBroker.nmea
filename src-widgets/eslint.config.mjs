@@ -11,7 +11,7 @@ config.forEach(rule => {
 export default [
     ...config,
     {
-        files: ['**/*.js'],
+        files: ['**/*.tsx', '**/*.ts'],
         rules: {
             '@typescript-eslint/no-require-imports': 'off',
         },
@@ -30,12 +30,6 @@ export default [
         },
     },
     {
-        ignores: [
-            'src-widgets/.__mf__temp/**/*',
-            'src-widgets/build/**/*',
-            'src-widgets/node_modules/**/*',
-            'widgets/**/*',
-            'test/**/*',
-        ],
+        ignores: ['.__mf__temp/**/*', 'build/**/*', 'node_modules/**/*'],
     },
 ];

@@ -2,6 +2,7 @@
 import { encodeActisense } from '@canboat/canboatjs/lib/stringMsg';
 import type { NmeaConfig } from '../types';
 import type { GenericDriver } from './genericDriver';
+import AutoPilot from './autoPilot';
 /*
 //
 // N2k
@@ -109,165 +110,27 @@ void SetRaymarineKeyCommandPGN126720(tN2kMsg& N2kMsg, uint8_t destinationAddress
  */
 type AutoPilotMode = 'Standby' | 'Auto' | 'Wind' | 'Track';
 
-class SeaTalkAutoPilot {
-    private readonly adapter: ioBroker.Adapter;
-
-    private readonly config: NmeaConfig;
-
-    private readonly nmeaDriver: GenericDriver;
-
-    private readonly autoPilotAddress: number;
-
+export default class SeaTalkAutoPilot extends AutoPilot {
     private currentMode: AutoPilotMode | null = null;
 
     private currentTargetHeading: number | null = null;
-
-    private readonly values: Record<string, { val: ioBroker.StateValue; ts: number }>;
 
     constructor(
         adapter: ioBroker.Adapter,
         config: NmeaConfig,
         nmeaDriver: GenericDriver,
-        autoPilotAddress: number,
         values: Record<string, { val: ioBroker.StateValue; ts: number }>,
+        autoPilotAddress?: number,
     ) {
-        this.adapter = adapter;
-        this.config = config;
-        this.values = values;
+        super(adapter, config, nmeaDriver, values, autoPilotAddress);
 
-        // create states
-        this.adapter.setObjectNotExists('autoPilot', {
-            type: 'channel',
-            common: {
-                name: 'SeaTalkAutoPilot',
-            },
-            native: {
-                autoPilotAddress,
-            },
-        });
-        this.adapter.setObjectNotExists('autoPilot.state', {
-            type: 'state',
-            common: {
-                name: 'Auto pilot mode',
-                type: 'number',
-                role: 'value.mode.autopilot',
-                write: true,
-                read: true,
-                states: {
-                    0: 'Standby',
-                    1: 'Auto',
-                    2: 'AutoWind',
-                    3: 'AutoTrack',
-                },
-            },
-            native: {
-                autoPilotAddress,
-            },
-        });
-        this.adapter.setObjectNotExists('autoPilot.heading', {
-            type: 'state',
-            common: {
-                name: 'SeaTalkAutoPilot',
-                type: 'number',
-                role: 'value.direction.autopilot',
-                write: true,
-                read: true,
-                unit: '°',
-            },
-            native: {
-                autoPilotAddress,
-            },
-        });
-        this.adapter.setObjectNotExists('autoPilot.headingPlus1', {
-            type: 'state',
-            common: {
-                name: 'Increase heading by 1°',
-                type: 'boolean',
-                role: 'button',
-                write: true,
-                read: false,
-                unit: '°',
-            },
-            native: {
-                autoPilotAddress,
-            },
-        });
-        this.adapter.setObjectNotExists('autoPilot.headingPlus10', {
-            type: 'state',
-            common: {
-                name: 'Increase heading by 10°',
-                type: 'boolean',
-                role: 'button',
-                write: true,
-                read: false,
-                unit: '°',
-            },
-            native: {
-                autoPilotAddress,
-            },
-        });
-
-        this.adapter.setObjectNotExists('autoPilot.headingMinus1', {
-            type: 'state',
-            common: {
-                name: 'Decrease heading by 1°',
-                type: 'boolean',
-                role: 'button',
-                write: true,
-                read: false,
-                unit: '°',
-            },
-            native: {
-                autoPilotAddress,
-            },
-        });
-
-        this.adapter.setObjectNotExists('autoPilot.headingMinus10', {
-            type: 'state',
-            common: {
-                name: 'Decrease heading by 10°',
-                type: 'boolean',
-                role: 'button',
-                write: true,
-                read: false,
-                unit: '°',
-            },
-            native: {
-                autoPilotAddress,
-            },
-        });
-        this.adapter.setObjectNotExists('autoPilot.windAngleChange', {
-            type: 'state',
-            common: {
-                name: 'SeaTalkAutoPilot',
-                type: 'number',
-                role: 'value',
-                write: true,
-                read: false,
-                states: {
-                    1: 'Increment 1°',
-                    10: 'Increment 10°',
-                    '-1': 'Decrement 1°',
-                    '-10': 'Decrement 10°',
-                },
-                unit: '°',
-            },
-            native: {
-                autoPilotAddress,
-            },
-        });
-
-        this.adapter.subscribeStates('autoPilot.*');
         this.adapter.subscribeStates('seatalk1PilotMode.pilotMode');
         // this.adapter.subscribeStates('seatalkPilotMode.*');
         this.adapter.subscribeStates('seatalkPilotLockedHeading.*');
-
-        this.nmeaDriver = nmeaDriver;
-        this.autoPilotAddress = autoPilotAddress;
     }
 
     stop(): void {
-        this.adapter.unsubscribeStates('autoPilot.*');
+        super.stop();
         this.adapter.unsubscribeStates('seatalk1PilotMode.pilotMode');
         this.adapter.unsubscribeStates('seatalkPilotLockedHeading.targetHeadingMagneticTrue');
     }
@@ -278,20 +141,20 @@ class SeaTalkAutoPilot {
                 if (this.currentMode !== state.val) {
                     this.currentMode = state.val as AutoPilotMode;
                     if (state.val === 'Auto') {
-                        this.adapter.setState('autoPilot.state', 1, true); // Auto
+                        void this.adapter.setState('autoPilot.state', 1, true); // Auto
                     } else if (state.val === 'Wind') {
-                        this.adapter.setState('autoPilot.state', 2, true); // Auto Wind
+                        void this.adapter.setState('autoPilot.state', 2, true); // Auto Wind
                     } else if (state.val === 'Track') {
-                        this.adapter.setState('autoPilot.state', 3, true); // Auto Track
+                        void this.adapter.setState('autoPilot.state', 3, true); // Auto Track
                     } else if (state.val === 'Standby') {
-                        this.adapter.setState('autoPilot.state', 0, true); // Standby
+                        void this.adapter.setState('autoPilot.state', 0, true); // Standby
                     } else {
                         this.adapter.log.warn(`Unknown pilot mode ${state.val}`);
                     }
                 }
             } else if (id.endsWith('seatalkPilotLockedHeading.targetHeadingMagneticTrue') && state.ack) {
                 if (this.currentTargetHeading !== state.val) {
-                    this.adapter.setState('autoPilot.heading', state.val, true);
+                    void this.adapter.setState('autoPilot.heading', state.val, true);
                     this.currentTargetHeading = state.val as any as number;
                 }
             }
@@ -386,7 +249,7 @@ class SeaTalkAutoPilot {
     // "Z,3,126208,7,204, 14,01,50,ff,00,f8,03,01,3b,07,03,04,06,00,00"; // set 0 magnetic
     // "Z,3,126208,7,204, 14,01,50,ff,00,f8,03,01,3b,07,03,04,06,9f,3e"; // set 92 magnetic
     // "Z,3,126208,7,204, 14,01,50,ff,00,f8,03,01,3b,07,03,04,06,4e,3f"; // set 93 magnetic
-    setStandby(): void {
+    private setStandby(): void {
         const data = encodeActisense({
             prio: 3,
             pgn: 126208,
@@ -398,7 +261,8 @@ class SeaTalkAutoPilot {
         });
         this.nmeaDriver.write(data);
     }
-    setAuto(): void {
+
+    private setAuto(): void {
         const data = encodeActisense({
             prio: 3,
             pgn: 126208,
@@ -410,7 +274,8 @@ class SeaTalkAutoPilot {
         });
         this.nmeaDriver.write(data);
     }
-    setAutoWind(): void {
+
+    private setAutoWind(): void {
         const data = encodeActisense({
             prio: 3,
             pgn: 126208,
@@ -422,7 +287,8 @@ class SeaTalkAutoPilot {
         });
         this.nmeaDriver.write(data);
     }
-    setAutoTrack(): void {
+
+    private setAutoTrack(): void {
         const data = encodeActisense({
             prio: 3,
             pgn: 126208,
@@ -434,7 +300,8 @@ class SeaTalkAutoPilot {
         });
         this.nmeaDriver.write(data);
     }
-    setLockedHeading(angle: number): void {
+
+    private setLockedHeading(angle: number): void {
         // remove magnetic variation
         if (
             this.values[this.config.magneticVariation || 'magneticVariation.variation'] &&
@@ -474,7 +341,7 @@ class SeaTalkAutoPilot {
     // increment 1:  0x07F8
     // increment 10: 0x08F7
 
-    setWindAngle(command: 1 | -1 | 10 | -10): void {
+    private setWindAngle(command: 1 | -1 | 10 | -10): void {
         let angleCommand: number;
         if (command === 1) {
             angleCommand = 0x07f8;
@@ -521,5 +388,3 @@ class SeaTalkAutoPilot {
         this.nmeaDriver.write(data);
     }
 }
-
-export default SeaTalkAutoPilot;

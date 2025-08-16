@@ -1,11 +1,10 @@
-import * as utils from '@iobroker/adapter-core';
-import fs from 'node:fs';
-import cp, { type ExecException } from 'node:child_process';
+import { type AdapterOptions, Adapter, I18n } from '@iobroker/adapter-core';
+import { readFileSync, existsSync } from 'node:fs';
+import { exec, type ExecException } from 'node:child_process';
 import { find } from 'geo-tz';
-import META_DATA from './lib/metaData';
-import AutoPilot from './lib/seaTalkAutoPilot';
-// @ts-expect-error no types
 import { FromPgn } from '@canboat/canboatjs';
+import type { PGN } from '@canboat/ts-pgns';
+
 import moment from 'moment';
 import 'moment/locale/de';
 import 'moment/locale/ru';
@@ -18,14 +17,17 @@ import 'moment/locale/es';
 import 'moment/locale/uk';
 import 'moment/locale/zh-cn';
 
-import type { PGNType, NmeaConfig, PgnDataEvent, PGNEntry } from './types';
+import type { PGNType, NmeaConfig, PGNEntry } from './types';
 
+import META_DATA from './lib/metaData';
+import SeaTalkAutoPilot from './lib/seaTalkAutoPilot';
+import NavicoAutoPilot from './lib/navicoAutopilot';
+import type AutoPilot from './lib/autoPilot';
 import NGT1 from './lib/ngt1';
 import PicanM from './lib/picanM';
-import t from './lib/i18n';
 import type { GenericDriver } from './lib/genericDriver';
 
-const PGNS: PGNType = JSON.parse(fs.readFileSync(require.resolve('@canboat/pgns/canboat.json'), 'utf8'));
+const PGNS: PGNType = JSON.parse(readFileSync(require.resolve('@canboat/pgns/canboat.json'), 'utf8'));
 
 const WELL_KNOWN_AIS_GROUPS = [
     'aisClassAPositionReport',
@@ -36,7 +38,7 @@ const WELL_KNOWN_AIS_GROUPS = [
     'aisUtcAndDateReport',
 ];
 
-export class NmeaAdapter extends utils.Adapter {
+export class NmeaAdapter extends Adapter {
     private createsChannelAndStates: Record<string, boolean> = {};
 
     private pgn2entry: Record<number, PGNEntry> = {};
@@ -81,7 +83,7 @@ export class NmeaAdapter extends utils.Adapter {
 
     private lang: ioBroker.Languages = 'en';
 
-    constructor(options: Partial<utils.AdapterOptions> = {}) {
+    constructor(options: Partial<AdapterOptions> = {}) {
         super({
             ...options,
             name: 'nmea',
@@ -214,7 +216,7 @@ export class NmeaAdapter extends utils.Adapter {
             let anyData = false;
             for (let s = 0; s < this.nmConfig.simulate.length; s++) {
                 const sim = this.nmConfig.simulate[s];
-                if (!sim || !sim.oid) {
+                if (!sim?.oid) {
                     continue;
                 }
                 if (this.simulationsValues[sim.oid] === undefined) {
@@ -253,7 +255,7 @@ export class NmeaAdapter extends utils.Adapter {
         }
     }
 
-    async writeState(id: string, val: ioBroker.StateValue): Promise<void> {
+    async writeState(id: string, val: ioBroker.StateValue, states?: Record<string, string>): Promise<void> {
         if (val !== undefined) {
             if (
                 !this.values[id] ||
@@ -261,13 +263,21 @@ export class NmeaAdapter extends utils.Adapter {
                 !this.nmConfig.updateAtLeastEveryMs ||
                 Date.now() - this.values[id].ts >= this.nmConfig.updateAtLeastEveryMs
             ) {
-                this.values[id] = { val: val, ts: Date.now() };
-                await this.setState(id, val, true);
+                this.values[id] = { val, ts: Date.now() };
+                if (states && val !== null && val !== undefined) {
+                    if (states[val.toString()] !== undefined) {
+                        await this.setState(id, states[val.toString()], true);
+                    } else {
+                        await this.setState(id, val.toString(), true);
+                    }
+                } else {
+                    await this.setState(id, val, true);
+                }
             }
         }
     }
 
-    async processWindEvent(data: PgnDataEvent): Promise<void> {
+    async processWindEvent(data: PGN): Promise<void> {
         // calculate true wind speed and angle
         // try to find a true direction and true speed
         let trueCog: number | undefined;
@@ -291,17 +301,18 @@ export class NmeaAdapter extends utils.Adapter {
             }
 
             if (trueSog !== undefined) {
+                const fields: Record<string, any> = data.fields;
                 // convert from radian to degree
-                const windAngle: number = (data.fields['Wind Angle'] * 180) / Math.PI;
+                const windAngle: number = (fields['Wind Angle'] * 180) / Math.PI;
                 // convert frm m/s to kn
-                const windSpeed: number = data.fields['Wind Speed'] * 1.9438444924574;
+                const windSpeed: number = fields['Wind Speed'] * 1.9438444924574;
 
                 let trueWindDirectionRounded: number;
                 let trueWindSpeedRounded: number;
                 let apparentWindDirectionRounded: number;
                 let apparentWindSpeedRounded: number;
 
-                if (data.fields.Reference?.includes('Apparent')) {
+                if (fields.Reference?.includes('Apparent')) {
                     // const awd = (boatHeading + awa) % 360;
                     // const u = (boatSpeed * Math.sin(boatHeading * Math.PI / 180)) - (aws * Math.sin(awd * Math.PI/180));
                     // const v = (boatSpeed * Math.cos(boatHeading * Math.PI / 180)) - (aws * Math.cos(awd * Math.PI/180));
@@ -325,7 +336,7 @@ export class NmeaAdapter extends utils.Adapter {
                     trueWindSpeedRounded = Math.round(trueWindSpeed * 100) / 100;
                     apparentWindDirectionRounded = Math.round(apparentWindDirection * 10) / 10;
                     apparentWindSpeedRounded = Math.round(windSpeed * 100) / 100;
-                } else if (data.fields.Reference && data.fields.Reference.includes('Magnetic')) {
+                } else if (fields.Reference && fields.Reference.includes('Magnetic')) {
                     trueWindSpeedRounded = windSpeed;
                     trueWindDirectionRounded =
                         (trueCog +
@@ -489,12 +500,12 @@ export class NmeaAdapter extends utils.Adapter {
 
                 // Calculate average and max wind speed for the last 30 seconds
                 const now = Date.now();
-                this.windSpeeds = this.windSpeeds || [];
+                this.windSpeeds ||= [];
                 this.windSpeeds.push({ tws: trueWindSpeedRounded, ts: now });
                 // Delete all entries older than X seconds
                 this.windSpeeds = this.windSpeeds.filter(w => now - w.ts < this.nmConfig.approximateMs);
 
-                this.windDirs = this.windDirs || [];
+                this.windDirs ||= [];
                 this.windDirs.push({ twd: trueWindDirectionRounded, ts: now });
                 // Delete all entries older than X seconds
                 this.windDirs = this.windDirs.filter(w => now - w.ts < this.nmConfig.approximateMs);
@@ -523,7 +534,7 @@ export class NmeaAdapter extends utils.Adapter {
                 await this.writeState(awsId, sumSpeed);
             } else {
                 // show warning only one time and only after 3 calculation rounds
-                this.trueWindSpeedError = this.trueWindSpeedError || 0;
+                this.trueWindSpeedError ||= 0;
                 if (this.trueWindSpeedError < 100) {
                     this.trueWindSpeedError++;
                 }
@@ -533,7 +544,7 @@ export class NmeaAdapter extends utils.Adapter {
             }
         } else {
             // show warning only one time and only after 3 calculation rounds
-            this.trueWindAngleError = this.trueWindAngleError || 0;
+            this.trueWindAngleError ||= 0;
             if (this.trueWindAngleError === 50) {
                 this.log.warn('Could not find true wind angle');
             }
@@ -543,9 +554,10 @@ export class NmeaAdapter extends utils.Adapter {
         }
     }
 
-    async processPositionEvent(data: PgnDataEvent): Promise<void> {
+    async processPositionEvent(data: PGN): Promise<void> {
         const id = `${this.pgn2entry[data.pgn].Id}.position`;
-        const val = `${data.fields.Longitude};${data.fields.Latitude}`;
+        const fields: Record<string, any> = data.fields;
+        const val = `${fields.Longitude};${fields.Latitude}`;
         if (!this.createsChannelAndStates[id]) {
             this.createsChannelAndStates[id] = true;
             const positionObject: ioBroker.StateObject = {
@@ -562,10 +574,10 @@ export class NmeaAdapter extends utils.Adapter {
             };
             await this.setObjectNotExistsAsync(id, positionObject);
         }
-        if (data.fields.Time) {
+        if (fields.Time) {
             // detect time zone
-            const timeZone = find(data.fields.Latitude, data.fields.Longitude); // ['America/Los_Angeles']
-            if (timeZone && timeZone[0]) {
+            const timeZone = find(fields.Latitude, fields.Longitude); // ['America/Los_Angeles']
+            if (timeZone?.[0]) {
                 const timeZoneID = `${this.pgn2entry[data.pgn].Id}.timeZone`;
                 if (!this.createsChannelAndStates[timeZoneID]) {
                     this.createsChannelAndStates[timeZoneID] = true;
@@ -598,7 +610,7 @@ export class NmeaAdapter extends utils.Adapter {
     setSystemTimeZone(zone: string): void {
         if (zone !== Intl.DateTimeFormat().resolvedOptions().timeZone && this.nmConfig.applyGpsTimeZoneToSystem) {
             if (process.platform === 'linux') {
-                cp.exec(`timedatectl set-timezone ${zone}`, (error, stdout, stderr) => {
+                exec(`timedatectl set-timezone ${zone}`, (error, stdout, stderr) => {
                     if (error || stderr) {
                         if (error) {
                             // eslint-disable-next-line @typescript-eslint/no-base-to-string
@@ -617,7 +629,7 @@ export class NmeaAdapter extends utils.Adapter {
         }
     }
 
-    async processMagneticVariation(data: PgnDataEvent, withReference: string[]): Promise<void> {
+    async processMagneticVariation(data: PGN, withReference: string[]): Promise<void> {
         for (let r = 0; r < withReference.length; r++) {
             const name = withReference[r];
             const pgnObj = this.pgn2entry[data.pgn];
@@ -648,9 +660,8 @@ export class NmeaAdapter extends utils.Adapter {
             if (!referenceVal) {
                 referenceVal = this.values[`${this.pgn2entry[data.pgn].Id}.reference`];
             }
-            if (referenceVal && referenceVal.val === 'Magnetic') {
-                val =
-                    val + (this.values[this.nmConfig.magneticVariation || 'magneticVariation.variation'].val as number);
+            if (referenceVal?.val === 'Magnetic') {
+                val += this.values[this.nmConfig.magneticVariation || 'magneticVariation.variation'].val as number;
             }
             await this.writeState(mId, val);
         }
@@ -661,9 +672,10 @@ export class NmeaAdapter extends utils.Adapter {
         return parts.map(p => p[0].toUpperCase() + p.substring(1).toLowerCase()).join('_');
     }
 
-    async processPressureEvent(data: PgnDataEvent): Promise<void> {
-        const source: string = data.fields.Source || '';
-        const pressure = Math.round(data.fields.Pressure / 10) / 10;
+    async processPressureEvent(data: PGN): Promise<void> {
+        const fields: Record<string, any> = data.fields;
+        const source: string = fields.Source || '';
+        const pressure = Math.round(fields.Pressure / 10) / 10;
         const pressureId = `${this.pgn2entry[data.pgn].Id}.pressure${NmeaAdapter.nameToId(source)}`;
 
         // check what the type of event it is
@@ -674,7 +686,7 @@ export class NmeaAdapter extends utils.Adapter {
                 const pressureObject: ioBroker.StateObject = {
                     _id: pressureId,
                     common: {
-                        name: `Pressure ${data.fields.Source}`,
+                        name: `Pressure ${fields.Source}`,
                         type: 'number',
                         unit: 'mbar',
                         role: 'value.pressure',
@@ -690,13 +702,13 @@ export class NmeaAdapter extends utils.Adapter {
         }
 
         // create the alert flag
-        const pressureAlertTextId = `${this.pgn2entry[data.pgn].Id}.pressure${NmeaAdapter.nameToId(data.fields.Source)}AlertText`;
+        const pressureAlertTextId = `${this.pgn2entry[data.pgn].Id}.pressure${NmeaAdapter.nameToId(fields.Source)}AlertText`;
         if (!this.createsChannelAndStates[pressureAlertTextId]) {
             this.createsChannelAndStates[pressureAlertTextId] = true;
             const pressureAlertTextObject: ioBroker.StateObject = {
                 _id: pressureAlertTextId,
                 common: {
-                    name: `Pressure ${data.fields.Source} Alert`,
+                    name: `Pressure ${fields.Source} Alert`,
                     type: 'string',
                     role: 'value',
                     read: true,
@@ -708,13 +720,13 @@ export class NmeaAdapter extends utils.Adapter {
             await this.updateObject(pressureAlertTextObject);
         }
 
-        const pressureAlertId = `${this.pgn2entry[data.pgn].Id}.pressure${NmeaAdapter.nameToId(data.fields.Source)}Alert`;
+        const pressureAlertId = `${this.pgn2entry[data.pgn].Id}.pressure${NmeaAdapter.nameToId(fields.Source)}Alert`;
         if (!this.createsChannelAndStates[pressureAlertId]) {
             this.createsChannelAndStates[pressureAlertId] = true;
             const pressureAlertObject: ioBroker.StateObject = {
                 _id: pressureAlertId,
                 common: {
-                    name: `Pressure ${data.fields.Source} Alert`,
+                    name: `Pressure ${fields.Source} Alert`,
                     type: 'boolean',
                     role: 'indicator.alarm',
                     read: true,
@@ -727,13 +739,13 @@ export class NmeaAdapter extends utils.Adapter {
         }
 
         // create the according flag
-        const pressureAlertHistoryId = `${this.pgn2entry[data.pgn].Id}.pressure${NmeaAdapter.nameToId(data.fields.Source)}AlertHistory`;
+        const pressureAlertHistoryId = `${this.pgn2entry[data.pgn].Id}.pressure${NmeaAdapter.nameToId(fields.Source)}AlertHistory`;
         if (!this.createsChannelAndStates[pressureAlertHistoryId]) {
             this.createsChannelAndStates[pressureAlertHistoryId] = true;
             const pressureHistoryObject: ioBroker.StateObject = {
                 _id: pressureAlertHistoryId,
                 common: {
-                    name: `Pressure ${data.fields.Source} Alert History`,
+                    name: `Pressure ${fields.Source} Alert History`,
                     type: 'array',
                     role: 'state',
                     read: true,
@@ -785,7 +797,7 @@ export class NmeaAdapter extends utils.Adapter {
                         const maxTs = moment(new Date(max.ts));
                         const tsDiff = minTs.from(maxTs);
 
-                        const alertText = t(`Pressure is falling by %s mbar in %s`, this.lang, diff, tsDiff);
+                        const alertText = I18n.t(`Pressure is falling by %s mbar in %s`, diff, tsDiff);
                         if (this.pressureAlerts[pressureId] !== alertText) {
                             if (!this.pressureAlerts[pressureId]) {
                                 await this.setState(pressureAlertId, true, true);
@@ -803,17 +815,18 @@ export class NmeaAdapter extends utils.Adapter {
         }
     }
 
-    async processTemperatureEvent(data: PgnDataEvent): Promise<void> {
+    async processTemperatureEvent(data: PGN): Promise<void> {
+        const fields: Record<string, any> = data.fields;
         // check what the type of event it is
-        if (data.fields['Temperature Source']) {
+        if (fields['Temperature Source']) {
             // create the according pressure
-            const tempId = `${this.pgn2entry[data.pgn].Id}.temperature${NmeaAdapter.nameToId(data.fields['Temperature Source'])}`;
+            const tempId = `${this.pgn2entry[data.pgn].Id}.temperature${NmeaAdapter.nameToId(fields['Temperature Source'])}`;
             if (!this.createsChannelAndStates[tempId]) {
                 this.createsChannelAndStates[tempId] = true;
                 const tempObject: ioBroker.StateObject = {
                     _id: tempId,
                     common: {
-                        name: `Temperature ${data.fields['Temperature Source']}`,
+                        name: `Temperature ${fields['Temperature Source']}`,
                         type: 'number',
                         unit: '°C',
                         role: 'value.temperature',
@@ -826,22 +839,23 @@ export class NmeaAdapter extends utils.Adapter {
                 await this.updateObject(tempObject);
             }
 
-            await this.setState(tempId, Math.round((data.fields.Temperature - 273.15) * 10) / 10, true);
+            await this.setState(tempId, Math.round((fields.Temperature - 273.15) * 10) / 10, true);
         }
     }
 
-    async processActualTemperatureEvent(data: PgnDataEvent): Promise<void> {
+    async processActualTemperatureEvent(data: PGN): Promise<void> {
+        const fields: Record<string, any> = data.fields;
         // check what the type of event it is
         // (data.fields['Actual Temperature'] && data.fields.Source) {
-        if (data.fields.Source) {
+        if (fields.Source) {
             // create the according pressure
-            const tempId = `${this.pgn2entry[data.pgn].Id}.actualTemperature${NmeaAdapter.nameToId(data.fields.Source)}`;
+            const tempId = `${this.pgn2entry[data.pgn].Id}.actualTemperature${NmeaAdapter.nameToId(fields.Source)}`;
             if (!this.createsChannelAndStates[tempId]) {
                 this.createsChannelAndStates[tempId] = true;
                 const tempObject: ioBroker.StateObject = {
                     _id: tempId,
                     common: {
-                        name: `Temperature ${data.fields.Source}`,
+                        name: `Temperature ${fields.Source}`,
                         type: 'number',
                         unit: '°C',
                         role: 'value.temperature',
@@ -854,7 +868,7 @@ export class NmeaAdapter extends utils.Adapter {
                 await this.updateObject(tempObject);
             }
 
-            await this.setState(tempId, Math.round((data.fields['Actual Temperature'] - 273.15) * 10) / 10, true);
+            await this.setState(tempId, Math.round((fields['Actual Temperature'] - 273.15) * 10) / 10, true);
         }
     }
 
@@ -881,7 +895,7 @@ export class NmeaAdapter extends utils.Adapter {
                 const ids = Object.keys(states);
                 for (let s = 0; s < ids.length; s++) {
                     const id = ids[s];
-                    if (!states[id] || states[id].ts > Date.now() - this.nmConfig.deleteAisAfter * 1000) {
+                    if (!states[id] || states[id].ts < Date.now() - this.nmConfig.deleteAisAfter * 1000) {
                         // delete object
                         await this.delObjectAsync(id);
                     }
@@ -890,10 +904,11 @@ export class NmeaAdapter extends utils.Adapter {
         }, 1000);
     }
 
-    async processAisData(data: PgnDataEvent): Promise<void> {
-        const aisId = `${this.pgn2entry[data.pgn].Id}.${data.fields['User ID']}`;
-        if (data.fields.Name) {
-            this.userId2Name[data.fields['User ID']] = { name: data.fields.Name as string, ts: Date.now() };
+    async processAisData(data: PGN): Promise<void> {
+        const fields: Record<string, any> = data.fields;
+        const aisId = `${this.pgn2entry[data.pgn].Id}.${fields['User ID']}`;
+        if (fields.Name) {
+            this.userId2Name[fields['User ID']] = { name: fields.Name as string, ts: Date.now() };
         }
         if (!this.aisGroups.includes(this.pgn2entry[data.pgn].Id)) {
             this.aisGroups.push(this.pgn2entry[data.pgn].Id);
@@ -906,7 +921,7 @@ export class NmeaAdapter extends utils.Adapter {
             const aisObject: ioBroker.StateObject = {
                 _id: aisId,
                 common: {
-                    name: (data.fields.Name as string) || this.userId2Name[data.fields['User ID']]?.name || '',
+                    name: (fields.Name as string) || this.userId2Name[fields['User ID']]?.name || '',
                     type: 'object',
                     role: 'value',
                     read: true,
@@ -918,15 +933,14 @@ export class NmeaAdapter extends utils.Adapter {
             await this.updateObject(aisObject);
         }
 
-        if (data.fields.SID) {
-            // @ts-expect-error no idea why this is not working
-            delete data.fields.SID;
+        if (fields.SID) {
+            delete fields.SID;
         }
 
-        await this.setState(aisId, JSON.stringify(data.fields), true);
+        await this.setState(aisId, JSON.stringify(fields), true);
     }
 
-    onData = async (data: PgnDataEvent): Promise<void> => {
+    onData = async (data: PGN): Promise<void> => {
         this.lastMessageReceived = Date.now();
 
         if (!this.connectedInterval) {
@@ -934,12 +948,17 @@ export class NmeaAdapter extends utils.Adapter {
             this.connectedInterval = this.setInterval(async () => {
                 if (!this.lastMessageReceived || Date.now() - this.lastMessageReceived >= 10000) {
                     await this.setState('info.connection', false, true);
-                    this.clearInterval(this.connectedInterval);
-                    this.connectedInterval = null;
-                    this.sendEnvironmentInterval && this.clearInterval(this.sendEnvironmentInterval);
-                    this.sendEnvironmentInterval = null;
+                    if (this.connectedInterval) {
+                        this.clearInterval(this.connectedInterval);
+                        this.connectedInterval = null;
+                    }
+                    if (this.sendEnvironmentInterval) {
+                        this.clearInterval(this.sendEnvironmentInterval);
+                        this.sendEnvironmentInterval = null;
+                    }
                 }
             }, 5000);
+
             if (this.nmConfig.simulationEnabled) {
                 this.sendEnvironmentInterval = this.setInterval(() => this.sendEnvironment(), 1000);
             }
@@ -949,40 +968,41 @@ export class NmeaAdapter extends utils.Adapter {
             if (await this.createNmeaChannel(data.pgn, data.src)) {
                 const keys = Object.keys(data.fields);
                 const withReference: string[] = [];
-                if (!data.fields['User ID']) {
+                const fields: Record<string, any> = data.fields;
+                if (!fields['User ID']) {
                     for (let k = 0; k < keys.length; k++) {
                         if (keys[k] === 'SID') {
                             continue;
                         }
-                        if (data.fields[`${keys[k]} Reference`]) {
+                        if (fields[`${keys[k]} Reference`]) {
                             withReference.push(keys[k]);
-                        } else if (keys[k] === 'Heading' && data.fields.Reference) {
+                        } else if (keys[k] === 'Heading' && fields.Reference) {
                             withReference.push(keys[k]);
                         }
-                        const val = data.fields[keys[k]];
+                        const val = fields[keys[k]];
                         const options = { pgn: data.pgn, name: keys[k], value: val };
-                        const id = await this.createNmeaState(options);
+                        const { id, states } = await this.createNmeaState(options);
                         if (id) {
-                            await this.writeState(id, options.value);
+                            await this.writeState(id, options.value, states);
                         }
                     }
                 }
-                if (data.fields['Wind Speed'] && data.fields['Wind Angle']) {
+                if (fields['Wind Speed'] && fields['Wind Angle']) {
                     await this.processWindEvent(data);
-                } else if (data.fields.Longitude && data.fields.Latitude) {
+                } else if (fields.Longitude && fields.Latitude) {
                     await this.processPositionEvent(data);
                 } else if (
                     withReference.length &&
                     this.values[this.nmConfig.magneticVariation || 'magneticVariation.variation']
                 ) {
                     await this.processMagneticVariation(data, withReference);
-                } else if (data.fields.Pressure && data.fields.Source) {
+                } else if (fields.Pressure && fields.Source) {
                     await this.processPressureEvent(data);
-                } else if (data.fields.Temperature && data.fields['Temperature Source']) {
+                } else if (fields.Temperature && fields['Temperature Source']) {
                     await this.processTemperatureEvent(data);
-                } else if (data.fields['Actual Temperature'] && data.fields.Source) {
+                } else if (fields['Actual Temperature'] && fields.Source) {
                     await this.processActualTemperatureEvent(data);
-                } else if (data.fields['User ID']) {
+                } else if (fields['User ID']) {
                     await this.processAisData(data);
                 }
             }
@@ -1010,6 +1030,7 @@ export class NmeaAdapter extends utils.Adapter {
 
         this.lang = systemConfig?.common?.language || 'en';
         moment.locale(this.lang); // set default locale
+        await I18n.init(__dirname, this.lang);
 
         await this.subscribeStatesAsync('test.rawString');
 
@@ -1025,7 +1046,7 @@ export class NmeaAdapter extends utils.Adapter {
         this.nmeaDriver?.start();
     }
 
-    async createNmeaChannel(pgn: number, srcAddress: number): Promise<boolean> {
+    async createNmeaChannel(pgn: number, srcAddress?: number): Promise<boolean> {
         if (this.pgn2entry[pgn]) {
             return true;
         }
@@ -1047,8 +1068,10 @@ export class NmeaAdapter extends utils.Adapter {
             this.pgn2entry[pgn] = obj;
 
             // if seatalk1PilotMode
-            if (pgn === 126720 && this.nmeaDriver) {
-                this.autoPilot = new AutoPilot(this, this.nmConfig, this.nmeaDriver, srcAddress, this.values);
+            if (pgn === 126720 && this.nmeaDriver && srcAddress) {
+                this.autoPilot = new SeaTalkAutoPilot(this, this.nmConfig, this.nmeaDriver, this.values, srcAddress);
+            } else if (pgn === 130860 && this.nmeaDriver && srcAddress) {
+                this.autoPilot = new NavicoAutoPilot(this, this.nmConfig, this.nmeaDriver, this.values, srcAddress);
             }
             return true;
         }
@@ -1086,15 +1109,19 @@ export class NmeaAdapter extends utils.Adapter {
         }
     }
 
-    async createNmeaState(options: { pgn: number; name: string; value: number | string }): Promise<string | false> {
+    async createNmeaState(options: {
+        pgn: number;
+        name: string;
+        value: number | string;
+    }): Promise<{ id: string | false; states?: Record<string, string> }> {
         const { pgn, name, value } = options;
         const pgnObj = this.pgn2entry[pgn];
         const field = pgnObj.Fields.find(f => f.Name === name);
-        let id;
-        let states;
-        let role;
+        let id: string;
+        let states: Record<string, string> | undefined;
+        let role: string | undefined;
         let commonType: ioBroker.CommonType | undefined;
-        let unit;
+        let unit: string | undefined;
         if (!field) {
             id = `${pgnObj.Id}.${name}`;
             commonType = typeof value as ioBroker.CommonType;
@@ -1113,7 +1140,7 @@ export class NmeaAdapter extends utils.Adapter {
                 const lookUp = PGNS.LookupEnumerations.find(l => l.Name === field.LookupEnumeration);
                 if (lookUp) {
                     states = {};
-                    lookUp.EnumValues.forEach(v => (states[v.Value] = v.Name));
+                    lookUp.EnumValues.forEach(v => (states![v.Value] = v.Name));
                 }
             } else if (field.FieldType === 'NUMBER') {
                 commonType = 'number';
@@ -1140,7 +1167,7 @@ export class NmeaAdapter extends utils.Adapter {
                 role = 'value';
             } else if (field.FieldType === 'RESERVED') {
                 // skip
-                return false;
+                return { id: false };
             } else {
                 this.log.warn(`Unsupported field type: ${field.FieldType}: value="${value}"`);
             }
@@ -1205,11 +1232,11 @@ export class NmeaAdapter extends utils.Adapter {
         }
 
         if (!commonType) {
-            return false;
+            return { id: false };
         }
 
         if (this.createsChannelAndStates[id]) {
-            return id;
+            return { id, states };
         }
 
         const stateObj: ioBroker.StateObject = {
@@ -1239,15 +1266,15 @@ export class NmeaAdapter extends utils.Adapter {
         }
         await this.updateObject(stateObj);
         this.createsChannelAndStates[id] = true;
-        return id;
+        return { id, states };
     }
 
     async onStateChange(id: string, state?: ioBroker.State | null): Promise<void> {
         if (id.endsWith('.test.rawString') && state?.val && !state.ack && typeof state.val === 'string') {
             let lines = [];
             if (state.val.endsWith('.txt')) {
-                if (fs.existsSync(`${__dirname}/test/${state.val}`)) {
-                    lines = fs.readFileSync(`${__dirname}/test/${state.val}`).toString().split('\n');
+                if (existsSync(`${__dirname}/test/${state.val}`)) {
+                    lines = readFileSync(`${__dirname}/test/${state.val}`).toString().split('\n');
                 } else {
                     this.log.warn(`File ${__dirname}/test/${state.val} not found`);
                     return;
@@ -1260,7 +1287,7 @@ export class NmeaAdapter extends utils.Adapter {
                 try {
                     const json = this.parser.parseString(lines[i]);
                     console.log(`Play "${lines[i]} => ${JSON.stringify(json)}`);
-                    if (json && json.fields) {
+                    if (json?.fields) {
                         await this.onData(json);
                     } else {
                         this.log.warn(`Cannot decode line: ${lines[i]}, ${JSON.stringify(json)}`);
@@ -1277,11 +1304,11 @@ export class NmeaAdapter extends utils.Adapter {
                 }
             }
         }
-        this.autoPilot && this.autoPilot.onStateChange(id, state);
+        this.autoPilot?.onStateChange(id, state);
     }
 
     onMessage(obj: ioBroker.Message): void {
-        if (!obj || !obj.command) {
+        if (!obj?.command) {
             return;
         }
 
@@ -1409,12 +1436,16 @@ export class NmeaAdapter extends utils.Adapter {
 
     onUnload(callback: () => void): void {
         try {
-            this.autoPilot && this.autoPilot.stop();
+            this.autoPilot?.stop();
             this.autoPilot = null;
-            this.connectedInterval && this.clearInterval(this.connectedInterval);
-            this.connectedInterval = null;
-            this.sendEnvironmentInterval && this.clearInterval(this.sendEnvironmentInterval);
-            this.sendEnvironmentInterval = null;
+            if (this.connectedInterval) {
+                this.clearInterval(this.connectedInterval);
+                this.connectedInterval = null;
+            }
+            if (this.sendEnvironmentInterval) {
+                this.clearInterval(this.sendEnvironmentInterval);
+                this.sendEnvironmentInterval = null;
+            }
             this.setState('info.connection', false, true).catch(e =>
                 this.log.error(`Cannot set info.connection to false: ${e}`),
             );
@@ -1428,7 +1459,7 @@ export class NmeaAdapter extends utils.Adapter {
 
 if (require.main !== module) {
     // Export the constructor in compact mode
-    module.exports = (options: Partial<utils.AdapterOptions>) => new NmeaAdapter(options);
+    module.exports = (options: Partial<AdapterOptions>) => new NmeaAdapter(options);
 } else {
     // otherwise start the instance directly
     new NmeaAdapter();
