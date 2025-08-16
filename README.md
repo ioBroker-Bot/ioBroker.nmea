@@ -85,7 +85,7 @@ The development of Simrad/navico/B&G is not completed yet.
 	### **WORK IN PROGRESS**
 -->
 ## Changelog
-### **WORK IN PROGRESS**
+### 0.3.0 (2025-08-16)
 * (bluefox) Widgets were rewritten on TypeScript
 * (bluefox) Corrected errors in the widgets and in the calculations
 * (bluefox) Small fix for ais data
