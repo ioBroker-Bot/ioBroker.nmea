@@ -52,7 +52,7 @@
         "translate": "translate-adapter",
         "update-packages": "npx -y npm-check-updates --upgrade && cd src-widgets && npx -y npm-check-updates --upgrade",
         "npm": "npm i && cd src-widgets && npm i -f",
-        "test": "mocha --exit",
+        "test": "mocha ./test/*.engine.js --exit",
         "lint": "eslint -c eslint.config.mjs && cd src-widgets && npm run lint",
         "build": "npm run build:ts && npm run build:gui",
         "build:gui": "node tasks",
