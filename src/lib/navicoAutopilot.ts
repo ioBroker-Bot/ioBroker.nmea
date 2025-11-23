@@ -1,5 +1,5 @@
 import { encodeActisense } from '@canboat/canboatjs/dist/stringMsg';
-import type { NmeaConfig, WritePgnData } from '../types';
+import type { NmeaConfig } from '../types';
 import type { GenericDriver } from './genericDriver';
 import AutoPilot from './autoPilot';
 

@@ -50,7 +50,10 @@ export type PGNType = {
 
 export interface NmeaConfig extends ioBroker.AdapterConfig {
     serialPort: string;
-    type: string;
+    type: 'ngt1' | 'picanm' | 'ydwg';
+    ydwgIp: string;
+    ydwgPort: string | number;
+    ydwgProtocol: 'udp' | 'tcp';
     canPort: string;
     updateAtLeastEveryMs: number;
     magneticVariation: string;

@@ -1,7 +1,6 @@
 import { Transform } from 'node:stream';
-import { canbus as CanPort } from '@canboat/canboatjs';
-import { FromPgn } from '@canboat/canboatjs';
-import { type NmeaConfig, type PGNMessage, type WritePgnData } from '../types';
+import { FromPgn, canbus as CanPort } from '@canboat/canboatjs';
+import { type NmeaConfig, type PGNMessage } from '../types';
 import { GenericDriver } from './genericDriver';
 import type { PGN } from '@canboat/ts-pgns';
 
@@ -10,7 +9,7 @@ export default class PicanM extends GenericDriver {
 
     private readonly pgnErrors: Record<string, boolean>;
 
-    private serial: any | null;
+    private serial: any;
 
     constructor(adapter: ioBroker.Adapter, settings: NmeaConfig, onData: (event: PGN) => void) {
         super(adapter, settings, onData);

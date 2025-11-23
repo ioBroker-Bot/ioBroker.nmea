@@ -25,6 +25,7 @@ import NavicoAutoPilot from './lib/navicoAutopilot';
 import type AutoPilot from './lib/autoPilot';
 import NGT1 from './lib/ngt1';
 import PicanM from './lib/picanM';
+import YDWG from './lib/ydwg';
 import type { GenericDriver } from './lib/genericDriver';
 
 const PGNS: PGNType = JSON.parse(readFileSync(require.resolve('@canboat/ts-pgns/canboat.json'), 'utf8'));
@@ -98,6 +99,9 @@ export class NmeaAdapter extends Adapter {
 
         this.nmConfig = {
             serialPort: 'COM3',
+            ydwgProtocol: 'tcp',
+            ydwgIp: '127.0.0.1',
+            ydwgPort: 1457,
             type: 'ngt1',
             canPort: 'can0',
             updateAtLeastEveryMs: 60000,
@@ -1038,8 +1042,10 @@ export class NmeaAdapter extends Adapter {
             this.nmeaDriver = new NGT1(this, this.nmConfig, this.onData);
         } else if (this.nmConfig.type === 'picanm') {
             this.nmeaDriver = new PicanM(this, this.nmConfig, this.onData);
+        } else if (this.nmConfig.type === 'ydwg') {
+            this.nmeaDriver = new YDWG(this, this.nmConfig, this.onData);
         } else {
-            this.log.error(`Unknown driver type: ${this.nmConfig.type}`);
+            this.log.error(`Unknown driver type: ${this.nmConfig.type as string}`);
             return;
         }
 
