@@ -97,7 +97,7 @@ The development of Simrad/navico/B&G is not completed yet.
 	### **WORK IN PROGRESS**
 -->
 ## Changelog
-### **WORK IN PROGRESS**
+### 0.4.0 (2025-11-30)
 * (bluefox) Added support of YDEN-02/03 and YDWG-02/03 gateways
 
 ### 0.3.0 (2025-08-16)
