@@ -396,7 +396,7 @@ export default class ItemsEditorDialog extends Component<ItemsEditorDialogProps,
                                     value={item.position || 'left'}
                                     onChange={e => {
                                         const items: InstrumentItem[] = JSON.parse(JSON.stringify(this.state.items));
-                                        items[index].position = e.target.value;
+                                        items[index].position = e.target.value as 'left' | 'right';
                                         this.updateItems(items);
                                     }}
                                 >

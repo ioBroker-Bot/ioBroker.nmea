@@ -94,19 +94,22 @@ export default class ItemsSelectorDialog extends Component<ItemsEditorDialogProp
 
     async componentDidMount(): Promise<void> {
         const states: Record<string, ioBroker.StateObject & { name: string; lowerName: string }> =
-            await this.props.context.socket.getObjectViewSystem(
+            (await this.props.context.socket.getObjectViewSystem(
                 'state',
                 `${this.props.instance}.`,
                 `${this.props.instance}.\u9999`,
-            );
+            )) as Record<string, ioBroker.StateObject & { name: string; lowerName: string }>;
         const channels: Record<
             string,
             ioBroker.ChannelObject & { count: number; states: string[]; name: string; lowerName: string }
-        > = await this.props.context.socket.getObjectViewSystem(
+        > = (await this.props.context.socket.getObjectViewSystem(
             'channel',
             `${this.props.instance}.`,
             `${this.props.instance}.\u9999`,
-        );
+        )) as Record<
+            string,
+            ioBroker.ChannelObject & { count: number; states: string[]; name: string; lowerName: string }
+        >;
         const stateIds = Object.keys(states);
         Object.keys(channels).forEach(channelId => {
             if (channelId.endsWith('.test') || !stateIds.find(id => id.startsWith(channelId))) {
