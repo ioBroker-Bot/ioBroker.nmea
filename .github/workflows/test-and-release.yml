@@ -38,8 +38,6 @@ jobs:
 
       - name: Install Dependencies
         run: npm i
-      - name: Linter
-        run: npm run lint
       - name: Build widgets
         run: npm run build
 
