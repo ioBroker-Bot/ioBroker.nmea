@@ -30,11 +30,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: ioBroker/testing-action-check@v1
+      - uses: actions/checkout@v6
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v6
         with:
-          node-version: '22.x'
-          install-command: 'npm install'
-          lint: true
+          node-version: 22.x
+
+      - name: Install Dependencies
+        run: npm i
+      - name: Linter
+        run: npm run lint
+      - name: Build widgets
+        run: npm run build
 
   # Runs adapter tests on all supported node versions and OSes
   adapter-tests:
