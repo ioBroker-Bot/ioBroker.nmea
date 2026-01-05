@@ -16,3 +16,6 @@ iob_npm.done
 # ioBroker dev-server
 .dev-server/
 /build/
+
+#ignore .commitinfo created by ioBroker release script
+.commitinfo
