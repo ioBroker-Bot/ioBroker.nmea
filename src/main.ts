@@ -617,7 +617,6 @@ export class NmeaAdapter extends Adapter {
                 exec(`timedatectl set-timezone ${zone}`, (error, stdout, stderr) => {
                     if (error || stderr) {
                         if (error) {
-                            // eslint-disable-next-line @typescript-eslint/no-base-to-string
                             this.log.error(`timedatectl set-timezone ${zone} error: ${error.toString()}`);
                         }
                         if (stderr) {
