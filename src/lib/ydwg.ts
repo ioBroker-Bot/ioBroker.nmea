@@ -124,7 +124,7 @@ export default class YDWG extends GenericDriver {
             });
 
             this.socketTcp.on('error', err => {
-                this.adapter.log.error(`TCP Socket-Error: ${err.message}`);
+                this.adapter.log.debug(`TCP Socket-Error: ${err.message}`);
                 this.reconnect();
             });
         }
