@@ -97,7 +97,7 @@ The development of Simrad/navico/B&G is not completed yet.
 	### **WORK IN PROGRESS**
 -->
 ## Changelog
-### **WORK IN PROGRESS**
+### 0.4.1 (2026-01-05)
 * (bluefox) Updated packages
 
 ### 0.4.0 (2025-11-30)
