@@ -1,14 +1,14 @@
 import { Transform } from 'node:stream';
-import { serial as SerialPort } from '@canboat/canboatjs';
-import { FromPgn } from '@canboat/canboatjs';
-import { type NmeaConfig, type PGNMessage, type WritePgnData } from '../types';
-import { GenericDriver } from './genericDriver';
+import { FromPgn, serial as SerialPort } from '@canboat/canboatjs';
 import type { PGN } from '@canboat/ts-pgns';
+
+import { type NmeaConfig, type PGNMessage } from '../types';
+import { GenericDriver } from './genericDriver';
 
 export default class NGT1 extends GenericDriver {
     private readonly serialPort: string;
 
-    private serial: any | null;
+    private serial: any;
 
     private readonly pgnErrors: Record<string, boolean>;
 
