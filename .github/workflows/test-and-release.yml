@@ -90,7 +90,7 @@ jobs:
         run: npm run build
 
       - name: Run local tests
-        run: npm run test-gui
+        run: npm run test:integration
 
       - name: Archive screenshots
         if: always()
