@@ -4,13 +4,11 @@ tmp
 admin/i18n/flat.txt
 admin/i18n/*/flat.txt
 iob_npm.done
-package-lock.json
 .vs/
 *.tgz
 
 /src-widgets/build
 /src-widgets/node_modules
-/src-widgets/package-lock.json
 /src-widgets/.__mf__temp/
 /widgets
 
