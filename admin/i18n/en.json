@@ -30,6 +30,15 @@
   "Temperature": "Temperature",
   "Humidity": "Humidity",
   "Pressure": "Pressure",
+  "Tank": "Tank",
+  "Tank instance": "Tank instance",
+  "Capacity (L)": "Capacity (L)",
+  "Tank: Fuel": "Tank: Fuel",
+  "Tank: Water": "Tank: Water",
+  "Tank: Gray water": "Tank: Gray water",
+  "Tank: Live well": "Tank: Live well",
+  "Tank: Oil": "Tank: Oil",
+  "Tank: Black water": "Tank: Black water",
   "Sea Temperature": "Sea Temperature",
   "Outside Temperature": "Outside Temperature",
   "Inside Temperature": "Inside Temperature",
@@ -65,5 +74,11 @@
   "mbar, set alert flag": "mbar, set alert flag",
   "In period of time": "In period of time",
   "minutes": "minutes",
-  "If pressure changes more than": "If pressure changes more than"
+  "If pressure changes more than": "If pressure changes more than",
+  "SignalK": "SignalK",
+  "Enable SignalK server": "Enable SignalK server",
+  "HTTP/WebSocket port": "HTTP/WebSocket port",
+  "Default SignalK port is 3000": "Default SignalK port is 3000",
+  "Allow SignalK clients to write to the bus": "Allow SignalK clients to write to the bus",
+  "Accept PUT/update deltas and inject them as PGNs (autopilot commands, simulated environment)": "Accept PUT/update deltas and inject them as PGNs (autopilot commands, simulated environment)"
 }

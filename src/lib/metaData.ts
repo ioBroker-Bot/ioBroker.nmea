@@ -156,7 +156,6 @@ const META_DATA: Record<
     humidity: {
         unit: '%',
         role: 'value.humidity',
-        factor: 250,
         round: 1,
     },
     temperature: {

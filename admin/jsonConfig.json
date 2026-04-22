@@ -228,6 +228,40 @@
                 }
             }
         },
+        "signalK": {
+            "type": "panel",
+            "label": "SignalK",
+            "items": {
+                "signalKEnabled": {
+                    "label": "Enable SignalK server",
+                    "type": "checkbox",
+                    "default": false,
+                    "sm": 12
+                },
+                "signalKPort": {
+                    "label": "HTTP/WebSocket port",
+                    "help": "Default SignalK port is 3000",
+                    "type": "number",
+                    "min": 1,
+                    "max": 65535,
+                    "default": 3000,
+                    "sm": 12,
+                    "md": 6,
+                    "lg": 4,
+                    "disabled": "!data.signalKEnabled"
+                },
+                "signalKBidirectional": {
+                    "label": "Allow SignalK clients to write to the bus",
+                    "help": "Accept PUT/update deltas and inject them as PGNs (autopilot commands, simulated environment)",
+                    "type": "checkbox",
+                    "default": true,
+                    "sm": 12,
+                    "md": 6,
+                    "lg": 4,
+                    "disabled": "!data.signalKEnabled"
+                }
+            }
+        },
         "simulate": {
             "type": "panel",
             "label": "Simulate",
@@ -279,6 +313,10 @@
                                 {
                                     "label": "Pressure",
                                     "value": "pressure"
+                                },
+                                {
+                                    "label": "Tank",
+                                    "value": "tank"
                                 }
                             ]
                         },
@@ -420,14 +458,61 @@
                                     "value": "Fuel",
                                     "label": "Fuel",
                                     "hidden": "data.type !== 'pressure'"
+                                },
+                                {
+                                    "value": "Fuel",
+                                    "label": "Tank: Fuel",
+                                    "hidden": "data.type !== 'tank'"
+                                },
+                                {
+                                    "value": "Water",
+                                    "label": "Tank: Water",
+                                    "hidden": "data.type !== 'tank'"
+                                },
+                                {
+                                    "value": "Gray water",
+                                    "label": "Tank: Gray water",
+                                    "hidden": "data.type !== 'tank'"
+                                },
+                                {
+                                    "value": "Live well",
+                                    "label": "Tank: Live well",
+                                    "hidden": "data.type !== 'tank'"
+                                },
+                                {
+                                    "value": "Oil",
+                                    "label": "Tank: Oil",
+                                    "hidden": "data.type !== 'tank'"
+                                },
+                                {
+                                    "value": "Black water",
+                                    "label": "Tank: Black water",
+                                    "hidden": "data.type !== 'tank'"
                                 }
                             ],
-                            "defaultFunc": "data.type === 'pressure' ? 'Atmospheric' : (data.type === 'humidity' ? 'Outside' : 'Outside Temperature')"
+                            "defaultFunc": "data.type === 'tank' ? 'Fuel' : (data.type === 'pressure' ? 'Atmospheric' : (data.type === 'humidity' ? 'Outside' : 'Outside Temperature'))"
                         },
                         {
                             "attr": "oid",
                             "type": "objectId",
                             "label": "Object ID"
+                        },
+                        {
+                            "attr": "instance",
+                            "type": "number",
+                            "label": "Tank instance",
+                            "min": 0,
+                            "max": 13,
+                            "default": 0,
+                            "hidden": "data.type !== 'tank'"
+                        },
+                        {
+                            "attr": "capacity",
+                            "type": "number",
+                            "label": "Capacity (L)",
+                            "min": 0,
+                            "default": 0,
+                            "hidden": "data.type !== 'tank'"
                         }
                     ],
                     "sm": 12

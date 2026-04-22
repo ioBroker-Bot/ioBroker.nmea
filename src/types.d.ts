@@ -61,8 +61,12 @@ export interface NmeaConfig extends ioBroker.AdapterConfig {
     combinedEnvironment: false;
     simulate: {
         oid: string;
-        type: 'temperature' | 'humidity' | 'pressure';
+        type: 'temperature' | 'humidity' | 'pressure' | 'tank';
         subType: string;
+        /** Tank PGN 127505 instance (0..13). Ignored for non-tank rows. */
+        instance?: number;
+        /** Tank total capacity in liters (PGN 127505 Capacity). Ignored for non-tank rows. */
+        capacity?: number;
     }[];
     simulateAddress: number;
     approximateMs: number;
@@ -70,6 +74,9 @@ export interface NmeaConfig extends ioBroker.AdapterConfig {
     deleteAisAfter: number;
     pressureAlertDiff: number;
     pressureAlertMinutes: number;
+    signalKEnabled: boolean;
+    signalKPort: number;
+    signalKBidirectional: boolean;
 }
 
 export interface PGNMessage {
@@ -81,7 +88,7 @@ export interface WritePgnData {
     prio: number;
     pgn: number;
     fields: {
-        SID: number;
+        sid: number;
         [key: string]: number | string;
     };
     src: number;

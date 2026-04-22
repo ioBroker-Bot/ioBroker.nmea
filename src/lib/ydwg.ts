@@ -16,6 +16,7 @@ export default class YDWG extends GenericDriver {
     private reconnectTimeout: NodeJS.Timeout | null = null;
     private aliveInterval: NodeJS.Timeout | null = null;
     private lastMessageTime = 0;
+    private tcpLineBuffer = '';
 
     private ydgw02: any;
 
@@ -84,18 +85,19 @@ export default class YDWG extends GenericDriver {
                 this.adapter.log.debug(`Listening for YDEN-0x UDP packets on ${addr?.address}:${addr?.port}`);
                 this.aliveInterval = setInterval(() => {
                     if (this.lastMessageTime && Date.now() - this.lastMessageTime > 10000) {
-                        this.adapter.log.warn('No UDP packets received from YDEN-0x for 30 seconds, reconnecting...');
+                        this.adapter.log.warn('No UDP packets received from YDEN-0x for 10 seconds, reconnecting...');
                         this.reconnect();
                     }
                 }, 10_000);
             });
         } else {
+            this.tcpLineBuffer = '';
             this.socketTcp = net.createConnection({ host: this.ipAddress, port: this.port }, () => {
                 this.adapter.log.debug(`Connected with YDEN-0x (${this.ipAddress}:${this.port})`);
                 this.lastMessageTime = Date.now();
                 this.aliveInterval = setInterval(() => {
                     if (this.lastMessageTime && Date.now() - this.lastMessageTime > 10000) {
-                        this.adapter.log.warn('No TCP packets received from YDEN-0x for 30 seconds, reconnecting...');
+                        this.adapter.log.warn('No TCP packets received from YDEN-0x for 10 seconds, reconnecting...');
                         this.reconnect();
                     }
                 }, 10_000);
@@ -111,15 +113,24 @@ export default class YDWG extends GenericDriver {
                     this.adapter.log.error(`YDGW: no parser available`);
                     return;
                 }
-                try {
-                    // YDEN-03 delivers N2K Frames, that could understood by canboatjs
-                    const msg = this.parser.parseString(chunk.toString());
-                    if (msg) {
-                        this.lastMessageTime = Date.now();
-                        this.onData(msg);
+                // YDEN frames are newline-terminated; a TCP read may deliver partial lines.
+                this.tcpLineBuffer += chunk.toString('ascii');
+                let newlineIdx: number;
+                while ((newlineIdx = this.tcpLineBuffer.indexOf('\n')) >= 0) {
+                    const line = this.tcpLineBuffer.slice(0, newlineIdx).replace(/\r$/, '');
+                    this.tcpLineBuffer = this.tcpLineBuffer.slice(newlineIdx + 1);
+                    if (!line) {
+                        continue;
                     }
-                } catch (e: any) {
-                    this.adapter.log.error(`Error by parsing: ${e?.message ?? e}`);
+                    try {
+                        const msg = this.parser.parseString(line);
+                        if (msg) {
+                            this.lastMessageTime = Date.now();
+                            this.onData(msg);
+                        }
+                    } catch (e: any) {
+                        this.adapter.log.error(`Error by parsing: ${e?.message ?? e}`);
+                    }
                 }
             });
 
@@ -131,7 +142,7 @@ export default class YDWG extends GenericDriver {
     }
 
     start(): void {
-        this.parser = new FromPgn();
+        this.parser = new FromPgn({ includeRawData: true });
 
         this.parser.on('warning', (pgn: PGNMessage, warning: string) => {
             if (this.pgnErrors[pgn.pgn]) {

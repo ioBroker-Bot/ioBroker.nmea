@@ -31,7 +31,7 @@ export default class PicanM extends GenericDriver {
     }
 
     start(): void {
-        const parser = new FromPgn();
+        const parser = new FromPgn({ includeRawData: true });
 
         parser.on('warning', (pgn: PGNMessage, warning: string) => {
             if (this.pgnErrors[pgn.pgn]) {

@@ -1,5 +1,20 @@
 const { deleteFoldersRecursive, buildReact, npmInstall, copyFiles } = require('@iobroker/build-tools');
 
+const SRC = 'src-devices/';
+const src = `${__dirname}/${SRC}`;
+
+function cleanDevices() {
+    deleteFoldersRecursive(`${src}build`);
+    deleteFoldersRecursive(`${__dirname}/admin/dm-widgets`);
+}
+
+function copyAllFilesDevices() {
+    copyFiles([`${SRC}build/customDevices.js`], `admin/dm-widgets`);
+    copyFiles([`${SRC}build/assets/*.*`], `admin/dm-widgets/assets`);
+    copyFiles([`${SRC}build/img/*`], `admin/dm-widgets/img`);
+    copyFiles([`${SRC}img/witmotion.png`], `admin/dm-widgets`);
+}
+
 function copyAllFiles() {
     copyFiles(
         [
@@ -36,5 +51,10 @@ if (process.argv.includes('--copy-files')) {
     deleteFoldersRecursive('widgets');
     npmInstall('src-widgets')
         .then(() => buildReact(`${__dirname}/src-widgets`, { rootDir: __dirname, vite: true }))
-        .then(() => copyAllFiles());
+        .then(() => copyAllFiles())
+        .then(() => cleanDevices())
+        .then(() => npmInstall(src))
+        .then(() => buildReact(src, { rootDir: src, vite: true }))
+        .then(() => copyAllFilesDevices())
+        .catch(e => console.error(`Cannot build: ${e}`));
 }

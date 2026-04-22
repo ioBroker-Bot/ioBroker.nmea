@@ -1,0 +1,12 @@
+{
+    "NmeaWindCompass": "NMEA Wind Compass",
+    "nmeawc_instance": "NMEA adapter instance",
+    "nmeawc_historySeconds": "Wind shift history (s)",
+    "nmeawc_historySeconds_help": "Seconds of AWA/TWA history used for the min/max shift sectors. 0 disables.",
+    "nmeawc_closeHauledAngle": "Close-hauled zone (°)",
+    "nmeawc_closeHauledAngle_help": "Half-angle of the port/starboard color bands at the bow.",
+    "nmeawc_speedUnit": "Speed unit",
+    "nmeawc_kn": "kn",
+    "nmeawc_m/s": "m/s",
+    "nmeawc_km/h": "km/h"
+}

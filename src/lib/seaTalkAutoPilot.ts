@@ -301,13 +301,16 @@ export default class SeaTalkAutoPilot extends AutoPilot {
     }
 
     private setLockedHeading(angle: number): void {
-        // remove magnetic variation
+        // Convert the True heading back to Magnetic (Raymarine protocol uses magnetic).
         if (
             this.values[this.config.magneticVariation || 'magneticVariation.variation'] &&
             this.values[this.config.magneticVariation || 'magneticVariation.variation'].val
         ) {
             angle -= this.values[this.config.magneticVariation || 'magneticVariation.variation'].val as number;
         }
+
+        // Normalize to [0, 360) so the 16-bit encoding never goes negative.
+        angle = ((angle % 360) + 360) % 360;
 
         const rad = (angle * Math.PI) / 180;
         const a = Math.round(rad / 0.0001);

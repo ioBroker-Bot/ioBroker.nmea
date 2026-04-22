@@ -19,3 +19,5 @@ iob_npm.done
 
 #ignore .commitinfo created by ioBroker release script
 .commitinfo
+/src-devices/build/
+/src-devices/.__mf__temp/
