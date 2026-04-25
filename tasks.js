@@ -12,7 +12,7 @@ function copyAllFilesDevices() {
     copyFiles([`${SRC}build/customDevices.js`], `admin/dm-widgets`);
     copyFiles([`${SRC}build/assets/*.*`], `admin/dm-widgets/assets`);
     copyFiles([`${SRC}build/img/*`], `admin/dm-widgets/img`);
-    copyFiles([`${SRC}img/witmotion.png`], `admin/dm-widgets`);
+    copyFiles([`${SRC}img/*.*`], `admin/dm-widgets`);
 }
 
 function copyAllFiles() {

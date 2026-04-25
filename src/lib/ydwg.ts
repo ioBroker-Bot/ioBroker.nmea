@@ -1,6 +1,7 @@
 import net from 'node:net';
 import dgram from 'node:dgram';
 import { Ydwg02, FromPgn } from '@canboat/canboatjs';
+import { actisenseToYdgwRawFormat } from '@canboat/canboatjs/dist/toPgn';
 import type { PGN } from '@canboat/ts-pgns';
 
 import { type NmeaConfig, type PGNMessage } from '../types';
@@ -152,7 +153,7 @@ export default class YDWG extends GenericDriver {
             this.adapter.log.warn(`${pgn.pgn} ${warning}`);
         });
 
-        this.app.setProviderStatus = (id: string, msg: string) => {
+        this.app.setProviderStatus = (_id: string, msg: string) => {
             if (msg.startsWith('Connected to')) {
                 this.adapter.log.debug('Connected to Yacht Devices Gateway');
             } else {
@@ -174,8 +175,40 @@ export default class YDWG extends GenericDriver {
     }
 
     write(data: string): void {
-        this.adapter.log.debug(`Sending ${JSON.stringify(data)} to YDGW`);
-        this.app?.emit('nmea2000out', data);
+        // Convert the Actisense-format frame produced by encodeActisense() into the
+        // YDGW-02 raw plain-text format ("hh:mm:ss.mmm T <canId> <bytes…>") and write
+        // it straight to the gateway. We bypass canboatjs' Ydwg02 output path because
+        // it gates sending on `sentAvailable`, which is only flipped when inbound data
+        // is piped through that stream (we use our own FromPgn parser instead, so it
+        // never flips and writes get silently dropped).
+        let lines: string[];
+        try {
+            lines = actisenseToYdgwRawFormat(data);
+        } catch (e: any) {
+            this.adapter.log.error(`YDGW: cannot convert frame to YDGW raw: ${e?.message ?? e}`);
+            return;
+        }
+        if (!lines?.length) {
+            this.adapter.log.warn(`YDGW: encoder returned no lines for ${JSON.stringify(data)}`);
+            return;
+        }
+        this.adapter.log.debug(`Sending to YDGW: ${lines.join(' | ')}`);
+        for (const raw of lines) {
+            const payload = `${raw}\r\n`;
+            if (this.protocol === 'tcp') {
+                if (!this.socketTcp || this.socketTcp.destroyed) {
+                    this.adapter.log.warn('YDGW: TCP socket not connected, dropping outbound frame');
+                    return;
+                }
+                this.socketTcp.write(payload);
+            } else {
+                if (!this.socketUdp) {
+                    this.adapter.log.warn('YDGW: UDP socket not bound, dropping outbound frame');
+                    return;
+                }
+                this.socketUdp.send(payload, this.port, this.ipAddress);
+            }
+        }
     }
 
     stop(): void {

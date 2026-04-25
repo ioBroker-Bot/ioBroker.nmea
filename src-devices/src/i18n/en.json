@@ -8,5 +8,24 @@
     "nmeawc_speedUnit": "Speed unit",
     "nmeawc_kn": "kn",
     "nmeawc_m/s": "m/s",
-    "nmeawc_km/h": "km/h"
+    "nmeawc_km/h": "km/h",
+
+    "NmeaHistoryChart": "NMEA History Chart",
+    "nmeahc_instance": "NMEA adapter instance",
+    "nmeahc_stateId": "State ID (relative to instance)",
+    "nmeahc_stateId_help": "Path under the instance, e.g. windData.windSpeedApparent",
+    "nmeahc_label": "Header label",
+    "nmeahc_unit": "Unit (display only)",
+    "nmeahc_historySeconds": "History window (s)",
+    "nmeahc_historySeconds_help": "How many seconds of samples to keep and display",
+    "nmeahc_yMin": "Y-axis minimum",
+    "nmeahc_yMin_help": "Lower bound (exact when autoScale is off, otherwise a suggestion)",
+    "nmeahc_yMax": "Y-axis maximum",
+    "nmeahc_yMax_help": "Upper bound (exact when autoScale is off, otherwise a suggestion)",
+    "nmeahc_autoScale": "Auto-scale Y-axis",
+    "nmeahc_autoScale_help": "Treat yMin/yMax only as suggestions and let the axis expand to fit the data",
+    "nmeahc_showMin": "Show min line",
+    "nmeahc_showAvg": "Show avg line",
+    "nmeahc_showMax": "Show max line",
+    "nmeahc_decimals": "Decimal places"
 }

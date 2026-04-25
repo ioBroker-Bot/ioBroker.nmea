@@ -1,5 +1,5 @@
 import { type AdapterOptions, Adapter, I18n } from '@iobroker/adapter-core';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync } from 'node:fs';
 import { exec, type ExecException } from 'node:child_process';
 import { find } from 'geo-tz';
 import { FromPgn } from '@canboat/canboatjs';
@@ -686,12 +686,11 @@ export class NmeaAdapter extends Adapter {
                 // variation is taken from the central source configured via `magneticVariation`.
                 const deviationState = this.values[`${channelId}.deviation`];
                 if (deviationState && typeof deviationState.val === 'number') {
-                    val += deviationState.val as number;
+                    val += deviationState.val;
                 }
-                const variationState =
-                    this.values[this.config.magneticVariation || 'magneticVariation.variation'];
+                const variationState = this.values[this.config.magneticVariation || 'magneticVariation.variation'];
                 if (variationState && typeof variationState.val === 'number') {
-                    val += variationState.val as number;
+                    val += variationState.val;
                 }
                 val = normDeg(val);
             }
@@ -1201,8 +1200,11 @@ export class NmeaAdapter extends Adapter {
         let unit: string | undefined;
         if (!field) {
             id = `${pgnObj.Id}.${name}`;
-            commonType = typeof value as ioBroker.CommonType;
-            if (commonType === 'object') {
+            // Unknown fields (not described by the PGN spec — e.g. canboat's synthetic
+            // unknownN on proprietary frames) can arrive as either hex strings or numbers
+            // across packets, so use 'mixed' to avoid type-mismatch errors.
+            commonType = 'mixed';
+            if (typeof value === 'object' && value !== null) {
                 options.value = JSON.stringify(value);
             }
         } else {
@@ -1237,10 +1239,12 @@ export class NmeaAdapter extends Adapter {
                 commonType = 'number';
                 role = 'value';
             } else if (field.FieldType === 'BINARY') {
-                commonType = typeof value as ioBroker.CommonType;
+                // canboat may emit BINARY as a hex string ("0x1234") or as a number,
+                // so use 'mixed' to allow either across consecutive packets.
+                commonType = 'mixed';
                 role = 'value';
             } else if (field.FieldType === 'SPARE') {
-                commonType = typeof value as ioBroker.CommonType;
+                commonType = 'mixed';
                 role = 'value';
             } else if (field.FieldType === 'RESERVED') {
                 // skip

@@ -126,17 +126,44 @@ export default class SeaTalkAutoPilot extends AutoPilot {
         this.adapter.subscribeStates('seatalk1PilotMode.pilotMode');
         // this.adapter.subscribeStates('seatalkPilotMode.*');
         this.adapter.subscribeStates('seatalkPilotLockedHeading.*');
+        this.adapter.subscribeStates('seatalkPilotMode.pilotMode');
     }
 
     stop(): void {
         super.stop();
         this.adapter.unsubscribeStates('seatalk1PilotMode.pilotMode');
         this.adapter.unsubscribeStates('seatalkPilotLockedHeading.targetHeadingMagneticTrue');
+        this.adapter.unsubscribeStates('seatalkPilotMode.pilotMode');
     }
 
     onStateChange(id: string, state?: ioBroker.State | null): void {
         if (state) {
-            if (id.endsWith('seatalk1PilotMode.pilotMode') && state.ack) {
+            if (id.endsWith('seatalkPilotMode.pilotMode')) {
+                let mode: AutoPilotMode = 'Standby';
+                if ((state.val as string).toLowerCase().includes('wind')) {
+                    mode = 'Wind';
+                } else if ((state.val as string).toLowerCase().includes('auto')) {
+                    mode = 'Auto';
+                } else if ((state.val as string).toLowerCase().includes('standby')) {
+                    mode = 'Standby';
+                } else if ((state.val as string).toLowerCase().includes('track')) {
+                    mode = 'Track';
+                }
+                if (this.currentMode !== mode) {
+                    this.currentMode = mode;
+                    if (mode === 'Auto') {
+                        void this.adapter.setState('autoPilot.state', 1, true); // Auto
+                    } else if (mode === 'Wind') {
+                        void this.adapter.setState('autoPilot.state', 2, true); // Auto Wind
+                    } else if (mode === 'Track') {
+                        void this.adapter.setState('autoPilot.state', 3, true); // Auto Track
+                    } else if (mode === 'Standby') {
+                        void this.adapter.setState('autoPilot.state', 0, true); // Standby
+                    } else {
+                        this.adapter.log.warn(`Unknown pilot mode ${state.val}`);
+                    }
+                }
+            } else if (id.endsWith('seatalk1PilotMode.pilotMode') && state.ack) {
                 if (this.currentMode !== state.val) {
                     this.currentMode = state.val as AutoPilotMode;
                     if (state.val === 'Auto') {
@@ -180,7 +207,7 @@ export default class SeaTalkAutoPilot extends AutoPilot {
                 if (newHeading < 0) {
                     newHeading += 360;
                 }
-                newHeading = newHeading % 360;
+                newHeading %= 360;
                 this.adapter.log.info(`Increase autoPilot heading by 1° to ${newHeading}°`);
                 this.setLockedHeading(newHeading);
             } else if (id.endsWith('autoPilot.headingPlus10') && !state.ack) {
@@ -204,7 +231,7 @@ export default class SeaTalkAutoPilot extends AutoPilot {
                 if (newHeading < 0) {
                     newHeading += 360;
                 }
-                newHeading = newHeading % 360;
+                newHeading %= 360;
                 this.adapter.log.info(`Decrease autoPilot heading by 1° to ${newHeading}°`);
                 this.setLockedHeading(newHeading);
             } else if (id.endsWith('autoPilot.headingMinus10') && !state.ack) {
@@ -216,7 +243,7 @@ export default class SeaTalkAutoPilot extends AutoPilot {
                 if (newHeading < 0) {
                     newHeading += 360;
                 }
-                newHeading = newHeading % 360;
+                newHeading %= 360;
                 this.adapter.log.info(`Decrease autoPilot heading by 10° to ${newHeading}°`);
                 this.setLockedHeading(newHeading);
             } else if (id.endsWith('autoPilot.heading') && !state.ack) {
@@ -228,7 +255,7 @@ export default class SeaTalkAutoPilot extends AutoPilot {
                 if (newHeading < 0) {
                     newHeading += 360;
                 }
-                newHeading = newHeading % 360;
+                newHeading %= 360;
                 this.adapter.log.info(`Set autoPilot heading to ${newHeading}°`);
                 this.setLockedHeading(newHeading);
             } else if (id.endsWith('autoPilot.windAngleChange') && !state.ack) {
@@ -262,6 +289,7 @@ export default class SeaTalkAutoPilot extends AutoPilot {
     }
 
     private setAuto(): void {
+
         const data = encodeActisense({
             prio: 3,
             pgn: 126208,
@@ -338,12 +366,31 @@ export default class SeaTalkAutoPilot extends AutoPilot {
         });
         this.nmeaDriver.write(data);
     }
+    // Pick a transport based on which pilot-mode PGN the autopilot is publishing.
+    // Older Raymarine units (ST*-series SmartPilots) report PGN 126720 (Seatalk1
+    // Encoded) → respond to the Seatalk1 keystroke; newer ones (e.g. S100/Evolution)
+    // report PGN 65379 → respond to a PGN 126208 Command targeting PGN 65345.
+    private setWindAngle(command: 1 | -1 | 10 | -10): void {
+        if (command !== 1 && command !== -1 && command !== 10 && command !== -10) {
+            this.adapter.log.warn('Invalid wind angle command');
+            return;
+        }
+        if (this.values['seatalk1PilotMode.pilotMode']) {
+            this.setWindAngleByKeystroke(command);
+        } else if (this.values['seatalkPilotMode.pilotMode']) {
+            this.setWindAngleByDatum(command);
+        } else {
+            this.adapter.log.warn(
+                'Cannot adjust wind angle: pilot mode source unknown (no seatalk1PilotMode or seatalkPilotMode received yet)',
+            );
+        }
+    }
+
     // decrement 1:  0x05FA
     // decrement 10: 0x06F9
     // increment 1:  0x07F8
     // increment 10: 0x08F7
-
-    private setWindAngle(command: 1 | -1 | 10 | -10): void {
+    private setWindAngleByKeystroke(command: 1 | -1 | 10 | -10): void {
         let angleCommand: number;
         if (command === 1) {
             angleCommand = 0x07f8;
@@ -351,11 +398,8 @@ export default class SeaTalkAutoPilot extends AutoPilot {
             angleCommand = 0x05fa;
         } else if (command === 10) {
             angleCommand = 0x08f7;
-        } else if (command === -10) {
-            angleCommand = 0x06f9;
         } else {
-            this.adapter.log.warn('Invalid wind angle command');
-            return;
+            angleCommand = 0x06f9;
         }
         const data = encodeActisense({
             prio: 3,
@@ -385,6 +429,52 @@ export default class SeaTalkAutoPilot extends AutoPilot {
                 0x42,
                 0xb1,
                 0xc8,
+            ]),
+        });
+        this.nmeaDriver.write(data);
+    }
+
+    // Adjust the locked wind angle in Wind mode for newer Raymarine units.
+    //
+    // Captured from a Raymarine S100 controller (src 1 → autopilot 204):
+    //   PGN 126208 Command group function, target PGN 65345 (Seatalk: Pilot Wind Datum),
+    //   3 parameters: manufacturerCode=Raymarine, industryCode=Marine Industry,
+    //   windDatum=<current windDatum ± delta in radians, encoded as 2-byte LE * 0.0001>.
+    //
+    // Example raw payload for +1° from 5.0256 rad → 5.0431 rad:
+    //   01 41 ff 00 f8 03 01 3b 07 03 04 04 ff c4
+    //   (0xc4ff = 50431 → 50431 * 0.0001 = 5.0431 rad)
+    private setWindAngleByDatum(command: 1 | -1 | 10 | -10): void {
+        const datumState = this.values['seatalkPilotWindDatum.windDatum'];
+        if (!datumState || typeof datumState.val !== 'number') {
+            this.adapter.log.warn('Cannot adjust wind angle: current windDatum is unknown');
+            return;
+        }
+        let newRad = datumState.val + (command * Math.PI) / 180;
+        const TWO_PI = 2 * Math.PI;
+        newRad = ((newRad % TWO_PI) + TWO_PI) % TWO_PI;
+        const encoded = Math.round(newRad / 0.0001);
+
+        const data = encodeActisense({
+            prio: 3,
+            pgn: 126208,
+            src: 7,
+            dst: this.autoPilotAddress,
+            data: Buffer.from([
+                0x01, // function code: Command
+                0x41,
+                0xff,
+                0x00, // target PGN 65345 (LE)
+                0xf8, // priority: leave unchanged + reserved
+                0x03, // 3 parameters
+                0x01,
+                0x3b,
+                0x07, // param 1: manufacturerCode = Raymarine
+                0x03,
+                0x04, // param 3: industryCode = Marine Industry
+                0x04,
+                encoded & 0xff,
+                (encoded >> 8) & 0xff, // param 4: windDatum (rad / 0.0001)
             ]),
         });
         this.nmeaDriver.write(data);

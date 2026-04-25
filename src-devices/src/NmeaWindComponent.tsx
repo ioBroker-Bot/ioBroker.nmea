@@ -497,7 +497,7 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
      * `compact=true` drops side AWS/TWS labels.
      */
     private renderCompassSvg(size: number | string, compact = false): React.JSX.Element {
-        const { heading, awa, aws, twa, tws, twd, sog, stw, awaHistory, twaHistory } = this.state;
+        const { heading, awa, aws, twa, tws, sog, stw, awaHistory } = this.state;
         const closeHauled = this.props.settings.closeHauledAngle ?? DEFAULT_CLOSE_HAULED;
         const isFloatComma = this.props.stateContext.isFloatComma;
         const awsDisplay = this.convertSpeed(aws);
@@ -772,8 +772,7 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                     TWA history is intentionally omitted so the map focuses on the "felt" wind. */}
                 {!compact &&
                     (() => {
-                        const windowMs =
-                            (this.props.settings.historySeconds ?? DEFAULT_HISTORY_SECONDS) * 1000;
+                        const windowMs = (this.props.settings.historySeconds ?? DEFAULT_HISTORY_SECONDS) * 1000;
                         if (windowMs <= 0) {
                             return null;
                         }
@@ -995,13 +994,21 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                                     x2={tail.x}
                                     y2={tail.y}
                                 >
-                                    <stop offset="0" stopColor={COLORS.blue} stopOpacity={1} />
+                                    <stop
+                                        offset="0"
+                                        stopColor={COLORS.blue}
+                                        stopOpacity={1}
+                                    />
                                     <stop
                                         offset="0.6"
                                         stopColor={COLORS.blue}
                                         stopOpacity={0.55}
                                     />
-                                    <stop offset="1" stopColor={COLORS.blue} stopOpacity={0} />
+                                    <stop
+                                        offset="1"
+                                        stopColor={COLORS.blue}
+                                        stopOpacity={0}
+                                    />
                                 </linearGradient>
                             </defs>
                             <line
@@ -1059,6 +1066,7 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                     fill={COLORS.cardBg}
                     stroke={COLORS.grey}
                     strokeWidth={5}
+                    opacity={0.7}
                 />
                 {/* Rect spans y=10..118 (centre at y=64). `dominantBaseline="central"` is unreliable
                     across renderers; instead we pin the baseline explicitly — baseline ≈ centre +

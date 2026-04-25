@@ -160,12 +160,21 @@
             "components": [
                 {
                     "name": "NmeaWindComponent",
-                    "label": "NMEA 2000",
+                    "label": "NMEA Wind",
                     "description": {
-                        "de": "Zeigt apparent wind",
-                        "en": "Shows apparent wind information"
+                        "en": "Shows wind information for sailing",
+                        "de": "Zeigt Windinformationen für das Segeln"
                     },
-                    "icon": "nmea.png"
+                    "icon": "wind.png"
+                },
+                {
+                    "name": "NmeaHistoryChartComponent",
+                    "label": "NMEA Chart",
+                    "description": {
+                        "en": "Shows history of values in a chart",
+                        "de": "Zeigt die Historie von Werten in einem Diagramm"
+                    },
+                    "icon": "chart.png"
                 }
             ]
         },
