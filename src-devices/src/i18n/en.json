@@ -27,5 +27,18 @@
     "nmeahc_showMin": "Show min line",
     "nmeahc_showAvg": "Show avg line",
     "nmeahc_showMax": "Show max line",
-    "nmeahc_decimals": "Decimal places"
+    "nmeahc_decimals": "Decimal places",
+
+    "NmeaAutopilot": "NMEA Autopilot",
+    "nmeaap_instance": "NMEA adapter instance",
+    "nmeaap_showAwa": "Show AWA",
+    "nmeaap_showRudder": "Show rudder bar",
+
+    "NmeaAisRadar": "NMEA AIS Radar",
+    "nmeaair_instance": "NMEA adapter instance",
+    "nmeaair_rangeNm": "Range (NM)",
+    "nmeaair_staleMinutes": "Drop targets after (min)",
+    "nmeaair_showVectors": "Show COG vectors",
+    "nmeaair_vectorMinutes": "Vector length (min)",
+    "nmeaair_courseUp": "Course-Up orientation"
 }

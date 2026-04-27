@@ -9,18 +9,30 @@ import { Connection } from '@iobroker/adapter-react-v5';
 import type { IStateContext, StateChangeListener, ObjectChangeListener } from '@iobroker/dm-widgets';
 import NmeaWindCompass from './NmeaWindComponent';
 import NmeaHistoryChartComponent from './NmeaHistoryChartComponent';
+import NmeaAutopilotComponent from './NmeaAutopilotComponent';
+import NmeaAisRadarComponent from './NmeaAisRadarComponent';
 
 const IOB_HOST = 'localhost';
 const IOB_PORT = 8081;
 const DEFAULT_INSTANCE = 'nmea.0';
 
-type WidgetTab = 'wind' | 'chart-aws' | 'chart-tws' | 'chart-sog' | 'chart-stw';
+type WidgetTab = 'wind' | 'autopilot' | 'aisradar' | 'chart-aws' | 'chart-tws' | 'chart-sog' | 'chart-stw';
 
 const ACTIVE_TAB_KEY = 'nmeaDevHarness.activeTab';
-const VALID_TABS: readonly WidgetTab[] = ['wind', 'chart-aws', 'chart-tws', 'chart-sog', 'chart-stw'];
+const VALID_TABS: readonly WidgetTab[] = [
+    'wind',
+    'autopilot',
+    'aisradar',
+    'chart-aws',
+    'chart-tws',
+    'chart-sog',
+    'chart-stw',
+];
 
-/** Read the last-selected tab from localStorage; fall back to the Wind compass on first visit or
- *  whenever the stored value isn't one of the currently-defined tabs (e.g. after a rename). */
+/**
+ * Read the last-selected tab from localStorage; fall back to the Wind compass on first visit or
+ *  whenever the stored value isn't one of the currently-defined tabs (e.g. after a rename).
+ */
 function loadStoredTab(): WidgetTab {
     try {
         const raw = window.localStorage.getItem(ACTIVE_TAB_KEY);
@@ -175,7 +187,7 @@ class DevStateContext implements IStateContext {
  */
 class DevWindCompass extends NmeaWindCompass {
     override render(): React.JSX.Element {
-        return (this as any).renderCompassSvg(Math.min(window.innerWidth, window.innerHeight) - 40, false);
+        return this.renderCompassSvg(Math.min(window.innerWidth, window.innerHeight) - 40, false);
     }
 }
 
@@ -187,7 +199,174 @@ class DevHistoryChart extends NmeaHistoryChartComponent {
     override render(): React.JSX.Element {
         const w = Math.min(window.innerWidth - 40, 1100);
         const h = Math.min(window.innerHeight - 120, Math.round(w / 1.5));
-        return <div style={{ width: w, height: h }}>{(this as any).renderChartSvg(false)}</div>;
+        return <div style={{ width: w, height: h }}>{this.renderChartSvg(false)}</div>;
+    }
+}
+
+/**
+ * Dev variant of the AIS radar — renders the radar at a square size constrained by the
+ * viewport. The component manages its own Leaflet map internally; we just need to give it a
+ * sized container.
+ */
+class DevAisRadar extends NmeaAisRadarComponent {
+    override render(): React.JSX.Element {
+        const size = Math.min(window.innerWidth - 40, window.innerHeight - 120, 800);
+        return (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <div style={{ width: size, height: size }}>
+                    {(this as any).renderRadar('100%', 'dev')}
+                </div>
+            </div>
+        );
+    }
+}
+
+/**
+ * Dev variant of the autopilot dial — renders the half-circle SVG directly plus the mode +
+ * heading-adjust controls, so the widget can be tested standalone without the host shell.
+ *
+ * In dev we don't usually have an autopilot connected; instead a small simulator pushes
+ * synthetic values into the component's state every 200 ms so the dial demonstrates HDG
+ * drift, locked-heading display, AWA pointer, and rudder bar against realistic-looking data.
+ * The simulator's mode is controlled by a local `simMode` field — clicking the widget's
+ * mode buttons updates it directly, bypassing the socket write that would otherwise be
+ * required for the change to be visible.
+ */
+class DevAutopilot extends NmeaAutopilotComponent {
+    private simInterval: ReturnType<typeof setInterval> | null = null;
+    private simStart = Date.now();
+    private simMode = 1; // start in Auto
+
+    override componentDidMount(): void {
+        super.componentDidMount?.();
+        // Tick at 5 Hz — quick enough to look smooth, light enough on the CPU.
+        this.simInterval = setInterval(() => this.tickSimulation(), 200);
+        this.tickSimulation();
+    }
+
+    override componentWillUnmount(): void {
+        if (this.simInterval) {
+            clearInterval(this.simInterval);
+            this.simInterval = null;
+        }
+        super.componentWillUnmount?.();
+    }
+
+    private tickSimulation(): void {
+        const t = (Date.now() - this.simStart) / 1000;
+        // HDG slowly oscillates around the locked heading so the rotating compass scale moves
+        // visibly on screen. ±8° ≈ realistic helmsman drift / wave-driven yaw.
+        const heading = ((175 + Math.sin(t / 4) * 8) % 360 + 360) % 360;
+        const lockedHeading = 174;
+        // AWA wobbles slowly around 35° starboard. Sign toggles every ~12 s so the pointer
+        // crosses the bow now and then.
+        const awa = Math.sin(t / 6) * 50;
+        // Rudder oscillates ±8° to show the bar swinging port/stbd.
+        const rudder = Math.sin(t / 2) * 8;
+        this.setState({
+            heading,
+            lockedHeading,
+            awa,
+            rudder,
+            mode: this.simMode,
+        } as any);
+    }
+
+    /**
+     * Intercept the mode-button clicks: in production the widget writes to the socket and
+     * the new mode propagates back via subscribeAll → setState; in dev the socket write
+     * silently no-ops, so capture the intent locally and let the simulator pick it up on
+     * the next tick.
+     */
+    override render(): React.JSX.Element {
+        const w = Math.min(window.innerWidth - 40, 1200);
+        const showRudder = this.props.settings.showRudder !== false;
+        const aspect = showRudder ? 1000 / 580 : 2;
+        const h = Math.min(window.innerHeight - 200, Math.round(w / aspect));
+
+        // Re-implement the controls inline so we can short-circuit to `simMode` instead of
+        // routing through the (no-op-in-dev) socket write. Heading-adjust buttons just bump
+        // the simulated locked heading directly, ignoring boolean-button semantics.
+        // Same colour scheme as the production widget — distinct hue per mode so the active
+        // state is recognisable at a glance (Standby red / Auto green / Wind blue / Track orange).
+        const modes: { val: number; label: string; color: string }[] = [
+            { val: 0, label: 'Standby', color: '#d32f2f' },
+            { val: 1, label: 'Auto', color: '#2e7d32' },
+            { val: 2, label: 'Wind', color: '#29b6f6' },
+            { val: 3, label: 'Track', color: '#ed6c02' },
+        ];
+        const setSimMode = (m: number): void => {
+            this.simMode = m;
+            this.setState({ mode: m } as any);
+        };
+        const adjustLocked = (delta: number): void => {
+            const cur = (this.state as any).lockedHeading ?? 0;
+            const next = ((Math.round(cur + delta) % 360) + 360) % 360;
+            this.setState({ lockedHeading: next } as any);
+        };
+        const mode = this.state.mode ?? 1;
+        const adjustDisabled = mode === 0 || mode === 3;
+
+        const MODE_BTN_WIDTH = 110;
+        const modeButtonStyle = (active: boolean, accent: string): React.CSSProperties => ({
+            width: MODE_BTN_WIDTH,
+            padding: '6px 0',
+            border: `1px solid ${accent}`,
+            background: active ? accent : 'transparent',
+            color: active ? '#fff' : accent,
+            borderRadius: 6,
+            fontFamily: 'system-ui, sans-serif',
+            fontSize: 14,
+            fontWeight: active ? 700 : 500,
+            cursor: 'pointer',
+        });
+        const adjustButtonStyle = (disabled: boolean): React.CSSProperties => ({
+            width: 60,
+            padding: '6px 0',
+            border: '1px solid #3a3f43',
+            background: '#0b0f14',
+            color: '#d8dde0',
+            borderRadius: 6,
+            fontFamily: 'system-ui, sans-serif',
+            fontSize: 14,
+            fontWeight: 500,
+            opacity: disabled ? 0.4 : 1,
+            cursor: disabled ? 'not-allowed' : 'pointer',
+        });
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: w, height: h }}>{this.renderDialSvg('100%', false, true)}</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                    {modes.map(m => (
+                        <button
+                            type="button"
+                            key={m.val}
+                            style={modeButtonStyle(mode === m.val, m.color)}
+                            onClick={() => setSimMode(m.val)}
+                        >
+                            {m.label}
+                        </button>
+                    ))}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                    {[-10, -1, 1, 10].map(delta => (
+                        <button
+                            type="button"
+                            key={delta}
+                            disabled={adjustDisabled}
+                            style={adjustButtonStyle(adjustDisabled)}
+                            onClick={() => adjustLocked(delta)}
+                        >
+                            {delta > 0 ? `+${delta}` : `${delta}`}
+                        </button>
+                    ))}
+                </div>
+                <div style={{ fontSize: 12, color: '#7e878e', fontFamily: 'system-ui, sans-serif' }}>
+                    Simulating: HDG drifting around 174°, AWA ±50°, rudder ±8°
+                </div>
+            </div>
+        );
     }
 }
 
@@ -276,6 +455,21 @@ export default function App(): React.JSX.Element {
         closeHauledAngle: 60,
     };
 
+    const autopilotSettings = {
+        size: '2x1' as const,
+        name: 'Autopilot',
+        favorite: false,
+        color: '',
+        chartHours: 0,
+        icon: '',
+        iconActive: '',
+        text: '',
+        textActive: '',
+        instance: DEFAULT_INSTANCE,
+        showAwa: true,
+        showRudder: true,
+    };
+
     const chartPreset = CHART_PRESETS.find(p => p.id === activeTab);
     const chartSettings = chartPreset
         ? {
@@ -301,8 +495,28 @@ export default function App(): React.JSX.Element {
 
     const tabs: { id: WidgetTab; label: string }[] = [
         { id: 'wind', label: 'Wind Compass' },
+        { id: 'autopilot', label: 'Autopilot' },
+        { id: 'aisradar', label: 'AIS Radar' },
         ...CHART_PRESETS.map(p => ({ id: p.id, label: p.tabLabel })),
     ];
+
+    const aisRadarSettings = {
+        size: '2x1' as const,
+        name: 'AIS Radar',
+        favorite: false,
+        color: '',
+        chartHours: 0,
+        icon: '',
+        iconActive: '',
+        text: '',
+        textActive: '',
+        instance: DEFAULT_INSTANCE,
+        rangeNm: 6,
+        showVectors: true,
+        vectorMinutes: 6,
+        courseUp: false,
+        staleMinutes: 10,
+    };
 
     return (
         <div
@@ -331,6 +545,22 @@ export default function App(): React.JSX.Element {
                         widget={widget as any}
                         stateContext={ctx as any}
                         settings={windSettings as any}
+                        onHide={() => {}}
+                    />
+                ) : activeTab === 'autopilot' ? (
+                    <DevAutopilot
+                        key="autopilot"
+                        widget={widget as any}
+                        stateContext={ctx as any}
+                        settings={autopilotSettings as any}
+                        onHide={() => {}}
+                    />
+                ) : activeTab === 'aisradar' ? (
+                    <DevAisRadar
+                        key="aisradar"
+                        widget={widget as any}
+                        stateContext={ctx as any}
+                        settings={aisRadarSettings as any}
                         onHide={() => {}}
                     />
                 ) : chartSettings ? (

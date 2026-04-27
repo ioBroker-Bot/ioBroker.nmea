@@ -496,7 +496,7 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
      * The full compass. Rendered in a 1000×1000 viewBox; `size` is the CSS pixel width.
      * `compact=true` drops side AWS/TWS labels.
      */
-    private renderCompassSvg(size: number | string, compact = false): React.JSX.Element {
+    protected renderCompassSvg(size: number | string, compact = false): React.JSX.Element {
         const { heading, awa, aws, twa, tws, sog, stw, awaHistory } = this.state;
         const closeHauled = this.props.settings.closeHauledAngle ?? DEFAULT_CLOSE_HAULED;
         const isFloatComma = this.props.stateContext.isFloatComma;

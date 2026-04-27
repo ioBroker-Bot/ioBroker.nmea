@@ -29,9 +29,7 @@ const IconButton: React.ComponentType<IconButtonProps> = MuiMaterial?.IconButton
 const CloseIcon: React.ComponentType<any> = MuiIcons?.Close;
 
 interface HistoryChartSettings extends CustomWidgetPlugin {
-    /** ioBroker instance, e.g. 'nmea.0' */
-    instance?: string;
-    /** State path relative to instance, e.g. 'windData.windSpeedApparent' */
+    /** State path absolute. 'nmea.0.windData.windSpeedApparent' */
     stateId?: string;
     /** Header label shown top-left (e.g. 'AWS') */
     label?: string;
@@ -43,8 +41,10 @@ interface HistoryChartSettings extends CustomWidgetPlugin {
     yMin?: number;
     /** Y-axis maximum. Acts as a suggestion if `autoScale` is true, as a hard upper bound otherwise. */
     yMax?: number;
-    /** If true, `yMin`/`yMax` are only suggested bounds — the axis expands whenever the data exceeds them.
-     *  If false, the axis is clamped to `[yMin, yMax]` exactly and out-of-range values are clipped. */
+    /**
+     * If true, `yMin`/`yMax` are only suggested bounds — the axis expands whenever the data exceeds them.
+     *  If false, the axis is clamped to `[yMin, yMax]` exactly and out-of-range values are clipped.
+     */
     autoScale?: boolean;
     /** Decimal places for the readout and min/avg/max labels. */
     decimals?: number;
@@ -60,8 +60,21 @@ interface HistoryChartState extends WidgetGenericState {
     dialogOpen: boolean;
 }
 
+// Schema defaults — also used at the read sites because json-config strips fields
+// whose value equals the schema default, so `settings.foo` arrives as `undefined`
+// for any field the user left at its default. We have to fall back to the same
+// constant in both places to keep "default" consistent.
 const DEFAULT_HISTORY_SECONDS = 60;
 const DEFAULT_DECIMALS = 1;
+const DEFAULT_STATE_ID = 'nmea.0.windData.windSpeedApparent';
+const DEFAULT_LABEL = 'AWS';
+const DEFAULT_UNIT = 'knots';
+const DEFAULT_Y_MIN = 0;
+const DEFAULT_Y_MAX = 0;
+const DEFAULT_AUTO_SCALE = true;
+const DEFAULT_SHOW_MIN = false;
+const DEFAULT_SHOW_AVG = true;
+const DEFAULT_SHOW_MAX = false;
 
 const COLORS = {
     bg: '#191c1d',
@@ -105,31 +118,24 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
             schema: {
                 type: 'panel',
                 items: {
-                    instance: {
-                        type: 'instance',
-                        adapter: 'nmea',
-                        label: 'nmeahc_instance',
-                        default: 'nmea.0',
-                        sm: 12,
-                    },
                     stateId: {
                         type: 'objectId',
                         label: 'nmeahc_stateId',
                         help: 'nmeahc_stateId_help',
-                        default: 'nmea.0.windData.windSpeedApparent',
+                        default: DEFAULT_STATE_ID,
                         fillOnSelect: 'common.name=>label(X),common.unit=>unit',
                         sm: 12,
                     },
                     label: {
                         type: 'text',
                         label: 'nmeahc_label',
-                        default: 'AWS',
+                        default: DEFAULT_LABEL,
                         sm: 6,
                     },
                     unit: {
                         type: 'text',
                         label: 'nmeahc_unit',
-                        default: 'knots',
+                        default: DEFAULT_UNIT,
                         sm: 6,
                     },
                     historySeconds: {
@@ -146,7 +152,7 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         type: 'number',
                         label: 'nmeahc_yMin',
                         help: 'nmeahc_yMin_help',
-                        default: 0,
+                        default: DEFAULT_Y_MIN,
                         sm: 12,
                         md: 4,
                     },
@@ -154,7 +160,7 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         type: 'number',
                         label: 'nmeahc_yMax',
                         help: 'nmeahc_yMax_help',
-                        default: 0,
+                        default: DEFAULT_Y_MAX,
                         sm: 12,
                         md: 4,
                     },
@@ -162,7 +168,7 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         type: 'checkbox',
                         label: 'nmeahc_autoScale',
                         help: 'nmeahc_autoScale_help',
-                        default: true,
+                        default: DEFAULT_AUTO_SCALE,
                         sm: 12,
                         md: 4,
                     },
@@ -170,19 +176,19 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         newLine: true,
                         type: 'checkbox',
                         label: 'nmeahc_showMin',
-                        default: false,
+                        default: DEFAULT_SHOW_MIN,
                         sm: 4,
                     },
                     showAvg: {
                         type: 'checkbox',
                         label: 'nmeahc_showAvg',
-                        default: true,
+                        default: DEFAULT_SHOW_AVG,
                         sm: 4,
                     },
                     showMax: {
                         type: 'checkbox',
                         label: 'nmeahc_showMax',
-                        default: false,
+                        default: DEFAULT_SHOW_MAX,
                         sm: 4,
                     },
                     decimals: {
@@ -213,10 +219,7 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
 
     componentDidUpdate(prevProps: Readonly<WidgetGenericProps<HistoryChartSettings>>): void {
         super.componentDidUpdate?.(prevProps, this.state);
-        if (
-            prevProps.settings.instance !== this.props.settings.instance ||
-            prevProps.settings.stateId !== this.props.settings.stateId
-        ) {
+        if (prevProps.settings.stateId !== this.props.settings.stateId) {
             this.unsubscribe();
             this.setState({ samples: [], current: null });
             this.subscribe();
@@ -233,13 +236,12 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
     }
 
     private subscribe(): void {
-        const instance = this.props.settings.instance || 'nmea.0';
-        const stateId = this.props.settings.stateId;
+        // json-config strips fields equal to their default → fall back to the schema default.
+        const stateId = this.props.settings.stateId || DEFAULT_STATE_ID;
         if (!stateId) {
             return;
         }
-        const fullId = `${instance}.${stateId}`;
-        this.subscribedId = fullId;
+        this.subscribedId = stateId;
         this.stateHandler = (_id, state) => {
             if (!state || state.val == null) {
                 return;
@@ -259,10 +261,10 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                 } as HistoryChartState;
             });
         };
-        this.props.stateContext.getState(fullId, this.stateHandler);
+        this.props.stateContext.getState(this.subscribedId, this.stateHandler);
         // Background-load historical samples so the chart isn't empty on first paint — but only
         // when the object opts into a default history adapter via `common.custom[defaultHistory]`.
-        void this.prefillFromHistory(fullId);
+        void this.prefillFromHistory(this.subscribedId);
     }
 
     /**
@@ -347,13 +349,12 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
      * Core chart renderer — 600×400 viewBox, scales to the container via width/height attrs.
      * `compact=true` drops the header + current readout (used by the small-tile variant).
      */
-    private renderChartSvg(compact = false): React.JSX.Element {
-        const { samples, current } = this.state;
-        const label = this.props.settings.label || 'Value';
-        const unit = this.props.settings.unit || '';
-        const decimals = this.props.settings.decimals ?? DEFAULT_DECIMALS;
-        const isFloatComma = this.props.stateContext.isFloatComma;
+    protected renderChartSvg(compact = false): React.JSX.Element {
+        const { samples } = this.state;
         const windowMs = (this.props.settings.historySeconds ?? DEFAULT_HISTORY_SECONDS) * 1000;
+        // User-configurable line color (settings.color from the host's base widget settings).
+        // Falls back to white so the chart still has a visible line if the user clears the picker.
+        const lineColor = this.getAccentColor() || COLORS.contrast;
 
         // ---- Geometry ----
         const VIEW_W = 600;
@@ -365,8 +366,14 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
         const chartWidth = chartRight - chartLeft;
         const chartHeight = chartBottom - chartTop;
 
+        // Anchor the chart's right edge to the latest sample's timestamp instead of `Date.now()`
+        // so the latest sample sits exactly on chartRight. Avoids the "tip flicker" where the
+        // hold-last-value extension grows between samples and then snaps back when a new sample
+        // arrives — the rightmost line segment was visibly jumping each time. Between samples
+        // the chart simply doesn't move; on each new sample everything shifts left in one step.
         const now = Date.now();
-        const startMs = now - windowMs;
+        const endMs = samples.length > 0 ? samples[samples.length - 1].ts : now;
+        const startMs = endMs - windowMs;
         const active = samples.filter(s => s.ts >= startMs);
 
         // ---- Data min / avg / max over the visible window ----
@@ -392,10 +399,10 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
         // ---- Y-axis scaling ----
         // `yMin`/`yMax` settings act as suggestions when `autoScale` is true (axis grows beyond
         // them if data exceeds), or as hard bounds when false (values outside are clipped).
-        const cfgMin = this.props.settings.yMin ?? 0;
-        const cfgMax = this.props.settings.yMax ?? 0;
+        const cfgMin = this.props.settings.yMin ?? DEFAULT_Y_MIN;
+        const cfgMax = this.props.settings.yMax ?? DEFAULT_Y_MAX;
         const hasCfgMax = cfgMax > cfgMin;
-        const autoScale = this.props.settings.autoScale ?? true;
+        const autoScale = this.props.settings.autoScale ?? DEFAULT_AUTO_SCALE;
         let yMin: number;
         let yMax: number;
         if (autoScale) {
@@ -417,20 +424,13 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
             chartBottom - ((Math.max(yMin, Math.min(yMax, val)) - yMin) / yRange) * chartHeight;
 
         // ---- Poly points / area path ----
+        // No hold-last-value extension: the chart's right edge is anchored to the latest sample's
+        // timestamp (see endMs above), so the latest sample is exactly at chartRight. The line
+        // stays continuous from chartLeft to chartRight without an artificial flat tail.
         const lineParts: string[] = [];
         for (let i = 0; i < active.length; i++) {
             const s = active[i];
             lineParts.push(`${xFor(s.ts).toFixed(1)},${yFor(s.val).toFixed(1)}`);
-        }
-        // Extend the line horizontally from the newest sample to "now" so the chart doesn't end
-        // in a blank strip when updates stop — the signal is assumed to hold its last known value.
-        if (active.length > 0) {
-            const lastVal = active[active.length - 1].val;
-            const nowX = xFor(now);
-            const lastX = xFor(active[active.length - 1].ts);
-            if (nowX > lastX + 0.5) {
-                lineParts.push(`${nowX.toFixed(1)},${yFor(lastVal).toFixed(1)}`);
-            }
         }
         const polyline = lineParts.join(' ');
 
@@ -438,18 +438,14 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
         let areaPath = '';
         if (active.length > 0) {
             const firstX = xFor(active[0].ts).toFixed(1);
-            // Use the last x in `lineParts` (which already includes the hold-last-value extension
-            // to "now") so the filled area reaches the chart's right edge instead of stopping at
-            // the last sample's timestamp.
-            const lastPoint = lineParts[lineParts.length - 1];
-            const lastX = lastPoint.split(',')[0];
+            const lastX = xFor(active[active.length - 1].ts).toFixed(1);
             areaPath = `M ${firstX},${chartBottom} L ${lineParts.join(' L ')} L ${lastX},${chartBottom} Z`;
         }
 
         // ---- Reference-line y positions (computed from dataMin/avg/dataMax) ----
-        const showMin = this.props.settings.showMin ?? false;
-        const showAvg = this.props.settings.showAvg ?? true;
-        const showMax = this.props.settings.showMax ?? false;
+        const showMin = this.props.settings.showMin ?? DEFAULT_SHOW_MIN;
+        const showAvg = this.props.settings.showAvg ?? DEFAULT_SHOW_AVG;
+        const showMax = this.props.settings.showMax ?? DEFAULT_SHOW_MAX;
         const avgY = avg != null ? yFor(avg) : null;
         const minY = dataMin != null ? yFor(dataMin) : null;
         const maxY = dataMax != null ? yFor(dataMax) : null;
@@ -469,34 +465,10 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                     fill={COLORS.cardBg}
                 />
 
-                {/* Header + current value (hidden in compact) */}
-                {!compact && (
-                    <>
-                        <text
-                            x={30}
-                            y={78}
-                            fontSize={64}
-                            fontWeight={700}
-                            fontFamily="Roboto, Arial, sans-serif"
-                            fill={COLORS.grey}
-                        >
-                            {label}
-                        </text>
-                        <text
-                            x={VIEW_W - 30}
-                            y={78}
-                            textAnchor="end"
-                            fontSize={56}
-                            fontWeight={800}
-                            fontFamily="Roboto, Arial, sans-serif"
-                            fill={COLORS.contrast}
-                        >
-                            {current != null
-                                ? `${formatNum(current, decimals, isFloatComma)}${unit ? ` ${unit}` : ''}`
-                                : '—'}
-                        </text>
-                    </>
-                )}
+                {/* Header (label + current value) and empty-state hint live OUTSIDE the SVG —
+                    SVG `<text>` cannot wrap or truncate-with-ellipsis, so long labels (e.g.
+                    "Apparent Wind Speed") were getting clipped at the viewBox right edge.
+                    See `renderChartWithChrome()` for the HTML overlay. */}
 
                 {/* Area fill under the raw-sample polyline */}
                 {areaPath ? (
@@ -507,117 +479,260 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                     />
                 ) : null}
 
-                {/* Raw-sample polyline */}
+                {/* Raw-sample polyline. `vectorEffect="non-scaling-stroke"` keeps the line at a
+                    constant pixel thickness even though the SVG uses preserveAspectRatio="none"
+                    (which would otherwise stretch the stroke horizontally on wide tiles). */}
                 {polyline ? (
                     <polyline
                         points={polyline}
                         fill="none"
-                        stroke={COLORS.contrast}
-                        strokeWidth={2}
+                        stroke={lineColor}
+                        strokeWidth={4}
                         strokeLinejoin="round"
+                        strokeLinecap="round"
+                        vectorEffect="non-scaling-stroke"
                     />
                 ) : null}
 
-                {/* Reference lines (min, avg, max) — each optional, each colour-coded. Labels sit in a
-                    dark pill so they stay readable over the grey fill and the raw polyline. */}
+                {/* Reference lines (dashed) — drawn inside SVG so they stretch with the chart.
+                    Labels (avg/min/max pills) live in the HTML overlay (`renderChartWithChrome`)
+                    so the text isn't horizontally distorted by `preserveAspectRatio="none"`. */}
                 {((): React.JSX.Element[] => {
-                    const refs: React.JSX.Element[] = [];
-                    const addRef = (
-                        key: string,
-                        y: number | null,
-                        value: number | null,
-                        stroke: string,
-                        slot: number, // horizontal slot for the label (0=left, 1=second-from-left, …)
-                    ): void => {
-                        if (y == null || value == null) {
+                    const lines: React.JSX.Element[] = [];
+                    const addLine = (key: string, y: number | null, stroke: string): void => {
+                        if (y == null) {
                             return;
                         }
-                        const labelX = chartLeft + 4 + slot * 82;
-                        refs.push(
-                            // Inner elements are drawn at y=0 and the parent <g> translates them
-                            // down to the target y via CSS `transform`. A CSS transition on
-                            // `transform` turns every y-change into a 100 ms glide instead of a
-                            // hard snap when min/avg/max drifts sample-by-sample.
-                            <g
-                                key={`ref-${key}`}
-                                style={{
-                                    transform: `translate(0px, ${y}px)`,
-                                    transition: 'transform 100ms ease-out',
-                                }}
-                            >
-                                <line
-                                    x1={chartLeft}
-                                    y1={0}
-                                    x2={chartRight}
-                                    y2={0}
-                                    stroke={stroke}
-                                    strokeWidth={2.5}
-                                    strokeDasharray="12 6"
-                                    strokeOpacity={0.85}
-                                />
-                                <rect
-                                    x={labelX}
-                                    y={-18}
-                                    width={78}
-                                    height={30}
-                                    rx={6}
-                                    fill={COLORS.cardBg}
-                                    fillOpacity={0.85}
-                                    stroke={stroke}
-                                    strokeOpacity={0.4}
-                                />
-                                {/* Single centred label "<key> <value>" — keeps the word and the
-                                    number as one glued unit in the pill centre. `dominantBaseline`
-                                    is unreliable across renderers, so we compute the baseline y
-                                    manually: rect spans [-18, +12] → centre -3 → baseline at
-                                    centre + cap-height/2 ≈ centre + fontSize × 0.35 = 4. */}
-                                <text
-                                    x={labelX + 39}
-                                    y={4}
-                                    textAnchor="middle"
-                                    fontSize={20}
-                                    fontWeight={600}
-                                    fontFamily="Roboto, Arial, sans-serif"
-                                >
-                                    <tspan fill={stroke}>{key}</tspan>
-                                    <tspan fill={COLORS.contrast}>
-                                        {` ${formatNum(value, decimals, isFloatComma)}`}
-                                    </tspan>
-                                </text>
-                            </g>,
+                        lines.push(
+                            <line
+                                key={`refline-${key}`}
+                                x1={chartLeft}
+                                y1={y}
+                                x2={chartRight}
+                                y2={y}
+                                stroke={stroke}
+                                strokeWidth={2.5}
+                                strokeDasharray="12 6"
+                                strokeOpacity={0.85}
+                                vectorEffect="non-scaling-stroke"
+                                style={{ transition: 'all 100ms ease-out' }}
+                            />,
                         );
                     };
-                    // Slot index runs left-to-right in config order so labels never overlap.
-                    let slot = 0;
                     if (showMin) {
-                        addRef('min', minY, dataMin, COLORS.minLine, slot++);
+                        addLine('min', minY, COLORS.minLine);
                     }
                     if (showAvg) {
-                        addRef('avg', avgY, avg, COLORS.avgLine, slot++);
+                        addLine('avg', avgY, COLORS.avgLine);
                     }
                     if (showMax) {
-                        addRef('max', maxY, dataMax, COLORS.maxLine, slot++);
+                        addLine('max', maxY, COLORS.maxLine);
                     }
-                    return refs;
+                    return lines;
                 })()}
 
-                {/* Empty-state hint */}
-                {!active.length ? (
-                    <text
-                        x={VIEW_W / 2}
-                        y={(chartTop + chartBottom) / 2}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        fontSize={28}
-                        fontWeight={500}
-                        fontFamily="Roboto, Arial, sans-serif"
-                        fill={COLORS.grey}
-                        opacity={0.6}
-                    >
-                        waiting for samples…
-                    </text>
-                ) : null}
+                {/* Empty-state hint moved to the HTML overlay (renderChartWithChrome) so it can
+                    use real CSS centring and a font that doesn't depend on the SVG's viewBox scale. */}
             </svg>
+        );
+    }
+
+    /**
+     * Wraps the SVG chart with HTML chrome (header + reference-line pills + empty-state).
+     * Using HTML instead of in-SVG `<text>` keeps text un-distorted by the SVG's
+     * preserveAspectRatio="none" stretching, lets long labels truncate with ellipsis, and
+     * gives proper centring without renderer-specific dominantBaseline quirks.
+     *
+     * VIEW_H is the internal SVG viewBox height; we convert per-line y values into
+     * percentages so the HTML pills stay aligned with the dashed lines as the chart resizes.
+     */
+    private renderChartWithChrome(isDialog: boolean): React.JSX.Element {
+        const label = this.props.settings.label ?? DEFAULT_LABEL;
+        const unit = this.props.settings.unit ?? DEFAULT_UNIT;
+        const decimals = this.props.settings.decimals ?? DEFAULT_DECIMALS;
+        const isFloatComma = this.props.stateContext.isFloatComma;
+        const { current } = this.state;
+        // Apply the user's `settings.color` (returned via getAccentColor) to the current-value
+        // readout so it visually matches the chart line. Falls back to white when unset.
+        const valueColor = this.getAccentColor() || COLORS.contrast;
+        const windowMs = (this.props.settings.historySeconds ?? DEFAULT_HISTORY_SECONDS) * 1000;
+        const showMin = this.props.settings.showMin ?? DEFAULT_SHOW_MIN;
+        const showAvg = this.props.settings.showAvg ?? DEFAULT_SHOW_AVG;
+        const showMax = this.props.settings.showMax ?? DEFAULT_SHOW_MAX;
+
+        // Recompute reference-line data in the same way as renderChartSvg so the pill positions
+        // stay locked to the dashed lines. SVG viewBox is 600×400 with chartTop=110 / bottom=380.
+        const VIEW_H = 400;
+        const chartTop = 110;
+        const chartBottom = VIEW_H - 20;
+        const chartHeight = chartBottom - chartTop;
+        const cfgMin = this.props.settings.yMin ?? DEFAULT_Y_MIN;
+        const cfgMax = this.props.settings.yMax ?? DEFAULT_Y_MAX;
+        const hasCfgMax = cfgMax > cfgMin;
+        const autoScale = this.props.settings.autoScale ?? DEFAULT_AUTO_SCALE;
+        const samples = this.state.samples;
+        const endMs = samples.length > 0 ? samples[samples.length - 1].ts : Date.now();
+        const startMs = endMs - windowMs;
+        const active = samples.filter(s => s.ts >= startMs);
+        let dataMin: number | null = null;
+        let dataMax: number | null = null;
+        let avg: number | null = null;
+        if (active.length > 0) {
+            dataMin = Infinity;
+            dataMax = -Infinity;
+            let sum = 0;
+            for (const s of active) {
+                if (s.val < dataMin) {
+                    dataMin = s.val;
+                }
+                if (s.val > dataMax) {
+                    dataMax = s.val;
+                }
+                sum += s.val;
+            }
+            avg = sum / active.length;
+        }
+        let yMin: number;
+        let yMax: number;
+        if (autoScale) {
+            const lowerSeed = dataMin ?? cfgMin;
+            const upperSeed = dataMax != null ? dataMax * 1.1 : cfgMin + 1;
+            yMin = Math.min(cfgMin, lowerSeed);
+            yMax = Math.max(hasCfgMax ? cfgMax : cfgMin + 1, upperSeed);
+        } else {
+            yMin = cfgMin;
+            yMax = hasCfgMax ? cfgMax : cfgMin + 1;
+        }
+        if (yMax <= yMin) {
+            yMax = yMin + 1;
+        }
+        const yRange = yMax - yMin;
+        const yPctFor = (val: number): number => {
+            const y = chartBottom - ((Math.max(yMin, Math.min(yMax, val)) - yMin) / yRange) * chartHeight;
+            return (y / VIEW_H) * 100;
+        };
+
+        const pills: { key: 'min' | 'avg' | 'max'; value: number; topPct: number; color: string }[] = [];
+        if (showMin && dataMin != null) {
+            pills.push({ key: 'min', value: dataMin, topPct: yPctFor(dataMin), color: COLORS.minLine });
+        }
+        if (showAvg && avg != null) {
+            pills.push({ key: 'avg', value: avg, topPct: yPctFor(avg), color: COLORS.avgLine });
+        }
+        if (showMax && dataMax != null) {
+            pills.push({ key: 'max', value: dataMax, topPct: yPctFor(dataMax), color: COLORS.maxLine });
+        }
+
+        const hasSamples = active.length > 0;
+        return (
+            <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
+                {/* The SVG fills the entire box; header / pills / empty-state are overlaid in front. */}
+                {this.renderChartSvg()}
+                {/* Reference-line pills — one per enabled stat. Stacked horizontally near the
+                    left edge with slot-spacing so they never overlap. `top` follows the dashed
+                    line at the same yPct; `transform: translateY(-50%)` centres the pill on the
+                    line. `transition: top` makes the pill glide when the underlying value changes. */}
+                {pills.map((p, i) => (
+                    <Box
+                        key={p.key}
+                        sx={{
+                            position: 'absolute',
+                            top: `${p.topPct}%`,
+                            left: `${8 + i * 88}px`,
+                            transform: 'translateY(-50%)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            px: '8px',
+                            py: '2px',
+                            borderRadius: '6px',
+                            backgroundColor: COLORS.cardBg,
+                            border: `1px solid ${p.color}66`,
+                            fontSize: 14,
+                            fontWeight: 600,
+                            lineHeight: 1.2,
+                            pointerEvents: 'none',
+                            transition: 'top 100ms ease-out',
+                            whiteSpace: 'nowrap',
+                        }}
+                    >
+                        <Box
+                            component="span"
+                            sx={{ color: p.color }}
+                        >
+                            {p.key}
+                        </Box>
+                        <Box
+                            component="span"
+                            sx={{ color: COLORS.contrast }}
+                        >
+                            {formatNum(p.value, decimals, isFloatComma)}
+                        </Box>
+                    </Box>
+                ))}
+                {/* Header — label left (truncates with ellipsis), value+unit right. */}
+                <Box
+                    sx={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        justifyContent: 'space-between',
+                        gap: 1,
+                        px: 1.5,
+                        pt: 1,
+                        pointerEvents: 'none',
+                    }}
+                >
+                    <Typography
+                        sx={{
+                            fontSize: 'clamp(14px, 4cqw, 28px)',
+                            fontWeight: 700,
+                            color: COLORS.grey,
+                            overflow: 'hidden',
+                            whiteSpace: 'nowrap',
+                            textOverflow: 'ellipsis',
+                            minWidth: 0,
+                            flex: '1 1 auto',
+                        }}
+                        title={label}
+                    >
+                        {label}
+                    </Typography>
+                    <Typography
+                        sx={{
+                            fontSize: isDialog ? 'clamp(32px, 10cqw, 64px)' : 'clamp(14px, 4cqw, 26px)',
+                            fontWeight: 800,
+                            color: valueColor,
+                            whiteSpace: 'nowrap',
+                            flex: '0 0 auto',
+                        }}
+                    >
+                        {current != null
+                            ? `${formatNum(current, decimals, isFloatComma)}${unit ? ` ${unit}` : ''}`
+                            : '—'}
+                    </Typography>
+                </Box>
+                {/* Empty-state hint — centred over the chart area when no samples have arrived yet. */}
+                {!hasSamples ? (
+                    <Box
+                        sx={{
+                            position: 'absolute',
+                            inset: 0,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            pointerEvents: 'none',
+                        }}
+                    >
+                        <Typography sx={{ fontSize: 14, color: COLORS.grey, opacity: 0.6, fontWeight: 500 }}>
+                            waiting for samples…
+                        </Typography>
+                    </Box>
+                ) : null}
+            </Box>
         );
     }
 
@@ -626,8 +741,8 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
         const accent = this.getAccentColor();
         const settingsButton = this.renderSettingsButton();
         const indicators = this.renderIndicators(settingsButton);
-        const label = this.props.settings.label || 'Value';
-        const unit = this.props.settings.unit || '';
+        const label = this.props.settings.label ?? DEFAULT_LABEL;
+        const unit = this.props.settings.unit ?? DEFAULT_UNIT;
         const decimals = this.props.settings.decimals ?? DEFAULT_DECIMALS;
         const isFloatComma = this.props.stateContext.isFloatComma;
         return (
@@ -701,7 +816,7 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                 >
                     {indicators}
                     <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'text.secondary' }}>
-                        {this.props.settings.label || 'Value'}
+                        {this.props.settings.label ?? DEFAULT_LABEL}
                     </Typography>
                     <Typography sx={{ fontSize: 28, fontWeight: 800 }}>
                         {formatNum(
@@ -709,7 +824,10 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                             this.props.settings.decimals ?? DEFAULT_DECIMALS,
                             this.props.stateContext.isFloatComma,
                         )}
-                        {this.props.settings.unit ? ` ${this.props.settings.unit}` : ''}
+                        {(() => {
+                            const u = this.props.settings.unit ?? DEFAULT_UNIT;
+                            return u ? ` ${u}` : '';
+                        })()}
                     </Typography>
                 </Box>
             </Box>
@@ -744,7 +862,17 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                     })}
                 >
                     {indicators}
-                    <Box sx={{ width: '100%', height: '100%' }}>{this.renderChartSvg(false)}</Box>
+                    <Box
+                        sx={{
+                            width: '100%',
+                            height: '100%',
+                            // Enable container queries so the HTML header can scale font-size
+                            // proportional to the actual rendered tile width (clamp(_, _cqw, _)).
+                            containerType: 'size',
+                        }}
+                    >
+                        {this.renderChartWithChrome(false)}
+                    </Box>
                 </Box>
             </Box>
         );
@@ -788,7 +916,15 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         overflow: 'hidden',
                     }}
                 >
-                    <Box sx={{ width: '100%', height: '100%' }}>{this.renderChartSvg(false)}</Box>
+                    <Box
+                        sx={{
+                            width: '100%',
+                            height: '100%',
+                            containerType: 'size',
+                        }}
+                    >
+                        {this.renderChartWithChrome(true)}
+                    </Box>
                 </DialogContent>
             </Dialog>
         );

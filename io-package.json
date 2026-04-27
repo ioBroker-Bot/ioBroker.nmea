@@ -175,6 +175,15 @@
                         "de": "Zeigt die Historie von Werten in einem Diagramm"
                     },
                     "icon": "chart.png"
+                },
+                {
+                    "name": "NmeaAutopilotComponent",
+                    "label": "NMEA Autopilot",
+                    "description": {
+                        "en": "Autopilot control for NMEA",
+                        "de": "Autopilotsteuerung für NMEA"
+                    },
+                    "icon": "autopilot.png"
                 }
             ]
         },
