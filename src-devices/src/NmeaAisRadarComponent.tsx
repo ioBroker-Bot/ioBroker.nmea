@@ -14,27 +14,43 @@
 
 import WidgetGeneric, {
     React,
+    MuiMaterial,
+    MuiIcons,
     getTileStyles,
     isNeumorphicTheme,
     type WidgetGenericProps,
     type WidgetGenericState,
     type CustomWidgetPlugin,
 } from '@iobroker/dm-widgets';
-import {
-    Box,
-    Typography,
-    Dialog,
-    DialogContent,
-    IconButton,
-    ToggleButton,
-    ToggleButtonGroup,
+import type {
+    BoxProps,
+    TypographyProps,
+    DialogProps,
+    IconButtonProps,
+    DialogContentProps,
+    ToggleButtonProps,
+    ToggleButtonGroupProps,
 } from '@mui/material';
-import { Close as CloseIcon, Add as AddIcon, Remove as RemoveIcon } from '@mui/icons-material';
 import type { ConfigItemPanel, ConfigItemTabs } from '@iobroker/json-config';
 // Leaflet renders the chart base layer behind the SVG overlay. Imported as a side-effect
 // for the CSS so the map container gets the default sizing/cursor behaviour.
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+
+// Same MUI bridge resolution as the other widgets (NmeaAutopilot / NmeaWind / NmeaHistoryChart):
+// pull components from the host-shared `window.__iobrokerShared__` via `@iobroker/dm-widgets`,
+// not via direct `@mui/material` imports. Keeps all plugins on the same React/MUI instance as
+// the host so there's no dual-instance hazard. The dev harness shims the global in dev-shim.ts.
+const Box: React.ComponentType<BoxProps> = MuiMaterial?.Box;
+const Typography: React.ComponentType<TypographyProps> = MuiMaterial?.Typography;
+const Dialog: React.ComponentType<DialogProps> = MuiMaterial?.Dialog;
+const DialogContent: React.ComponentType<DialogContentProps> = MuiMaterial?.DialogContent;
+const IconButton: React.ComponentType<IconButtonProps> = MuiMaterial?.IconButton;
+const ToggleButton: React.ComponentType<ToggleButtonProps> = MuiMaterial?.ToggleButton;
+const ToggleButtonGroup: React.ComponentType<ToggleButtonGroupProps> = MuiMaterial?.ToggleButtonGroup;
+const CloseIcon: React.ComponentType<any> = MuiIcons?.Close;
+const AddIcon: React.ComponentType<any> = MuiIcons?.Add;
+const RemoveIcon: React.ComponentType<any> = MuiIcons?.Remove;
 
 interface AisRadarSettings extends CustomWidgetPlugin {
     /** e.g. 'nmea.0' */
@@ -158,33 +174,13 @@ function classifyAisChannel(channelId: string): AisTarget['cls'] {
     return 'Other';
 }
 
-function targetColor(cls: AisTarget['cls']): string {
-    switch (cls) {
-        case 'A':
-            return COLORS.classA;
-        case 'B':
-            return COLORS.classB;
-        case 'AtoN':
-            return COLORS.aton;
-        case 'SAR':
-            return COLORS.sar;
-        default:
-            return COLORS.dim;
-    }
-}
-
 /**
  * Equirectangular projection: project (lat, lon) relative to (refLat, refLon) into local
- * meters east / north. The cosine factor keeps eastward distance correct as you move away
+ * meters east / north. The cosine factor keeps the eastward distance correct as you move away
  * from the equator. Linear in (Δlat, Δlon), so direct, fast, and within centimetres of
- * great-circle for ranges under ~100 NM at mid latitudes.
+ * great-circle for ranges under ~100 NM at mid-latitudes.
  */
-function projectToMeters(
-    lat: number,
-    lon: number,
-    refLat: number,
-    refLon: number,
-): { east: number; north: number } {
+function projectToMeters(lat: number, lon: number, refLat: number, refLon: number): { east: number; north: number } {
     const dLat = (lat - refLat) * RAD;
     const dLon = (lon - refLon) * RAD;
     const meanLat = (lat + refLat) * 0.5 * RAD;
@@ -461,7 +457,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
             return;
         }
         const ids = Object.keys(allObjects).filter(
-            id => PREFIXES.some(p => id.startsWith(p)) && allObjects![id]?.type === 'state',
+            id => PREFIXES.some(p => id.startsWith(p)) && allObjects[id]?.type === 'state',
         );
         for (const id of ids) {
             if (this.aisChannels.has(id)) {
@@ -501,8 +497,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
         const headingRaw = fields.heading ?? null;
         const sogRaw = fields.sog ?? null;
         const cog = cogRaw != null && isFinite(Number(cogRaw)) ? normDeg(Number(cogRaw) * DEG) : NaN;
-        const heading =
-            headingRaw != null && isFinite(Number(headingRaw)) ? normDeg(Number(headingRaw) * DEG) : null;
+        const heading = headingRaw != null && isFinite(Number(headingRaw)) ? normDeg(Number(headingRaw) * DEG) : null;
         const sog = sogRaw != null && isFinite(Number(sogRaw)) ? Number(sogRaw) * MS_TO_KN : 0;
 
         const channel = id.split('.').slice(0, -1).join('.'); // strip trailing MMSI
@@ -526,10 +521,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
             // Avoid pushing duplicate points — within ~5 m and 1 s of the last one is the same fix.
             const last = fresh[fresh.length - 1];
             const skipDuplicate =
-                last &&
-                Math.abs(last.lat - lat) < 5e-5 &&
-                Math.abs(last.lon - lon) < 5e-5 &&
-                ts - last.ts < 1000;
+                last && Math.abs(last.lat - lat) < 5e-5 && Math.abs(last.lon - lon) < 5e-5 && ts - last.ts < 1000;
             const trail = skipDuplicate ? fresh : [...fresh, { lat, lon, ts }];
             // Hard cap on history size so very long-running tracks don't bloat the buffer.
             if (trail.length > TRAIL_MAX_POINTS) {
@@ -1070,9 +1062,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                     })}
                 >
                     {indicators}
-                    <Box sx={{ width: '100%', aspectRatio: '1' }}>
-                        {this.renderRadar('100%', 'compact')}
-                    </Box>
+                    <Box sx={{ width: '100%', aspectRatio: '1' }}>{this.renderRadar('100%', 'compact')}</Box>
                     {this.props.settings.name ? (
                         <Typography
                             variant="caption"
@@ -1112,9 +1102,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                     })}
                 >
                     {indicators}
-                    <Box sx={{ height: '100%', aspectRatio: '1' }}>
-                        {this.renderRadar('100%', 'widetall')}
-                    </Box>
+                    <Box sx={{ height: '100%', aspectRatio: '1' }}>{this.renderRadar('100%', 'widetall')}</Box>
                 </Box>
             </Box>
         );

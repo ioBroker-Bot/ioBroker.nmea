@@ -94,24 +94,6 @@ function sectorPath(cx: number, cy: number, rInner: number, rOuter: number, from
     ].join(' ');
 }
 
-/** Min/max in a signed-angle sample set, handling the ±180° branch safely. */
-function angleRange(samples: { val: number }[]): { min: number; max: number } | null {
-    if (!samples.length) {
-        return null;
-    }
-    let min = samples[0].val;
-    let max = samples[0].val;
-    for (const s of samples) {
-        if (s.val < min) {
-            min = s.val;
-        }
-        if (s.val > max) {
-            max = s.val;
-        }
-    }
-    return { min, max };
-}
-
 /** Dark-theme palette for the dial — tuned for the black card + bright bow-fixed pointers. */
 const COLORS = {
     bg: '#191c1d',

@@ -5,20 +5,38 @@
 
 import WidgetGeneric, {
     React,
+    MuiMaterial,
+    MuiIcons,
     getTileStyles,
     isNeumorphicTheme,
     type WidgetGenericProps,
     type WidgetGenericState,
     type CustomWidgetPlugin,
 } from '@iobroker/dm-widgets';
-// Import MUI components directly (not through the dm-widgets `MuiMaterial` bridge). The bridge
-// reads `window.__iobrokerShared__` at module-init time and returns `undefined` whenever the
-// host hasn't populated that global yet (e.g. our Vite dev harness, or any race in HMR).
-// Direct imports always resolve to a real module, and Module Federation's `shared` config
-// routes them to the host's instance in production so there's no dual-instance hazard.
-import { Box, Typography, Dialog, DialogContent, IconButton, Button, ButtonGroup } from '@mui/material';
-import { Close as CloseIcon } from '@mui/icons-material';
+import type {
+    BoxProps,
+    TypographyProps,
+    DialogProps,
+    IconButtonProps,
+    DialogContentProps,
+    ButtonProps,
+    ButtonGroupProps,
+} from '@mui/material';
 import type { ConfigItemPanel, ConfigItemTabs } from '@iobroker/json-config';
+
+// Resolve MUI components from the host bridge — `@iobroker/dm-widgets` re-exports React/MUI
+// from `window.__iobrokerShared__` so all plugins use the same instance as the host (avoids
+// dual-instance issues in module federation). For the standalone Vite dev harness, the same
+// global is populated by `dev-shim.ts` (imported first in `index.tsx`) so the bridge works
+// there too — keeping this widget aligned with `NmeaWindComponent` and `NmeaHistoryChartComponent`.
+const Box: React.ComponentType<BoxProps> = MuiMaterial?.Box;
+const Typography: React.ComponentType<TypographyProps> = MuiMaterial?.Typography;
+const Dialog: React.ComponentType<DialogProps> = MuiMaterial?.Dialog;
+const DialogContent: React.ComponentType<DialogContentProps> = MuiMaterial?.DialogContent;
+const IconButton: React.ComponentType<IconButtonProps> = MuiMaterial?.IconButton;
+const Button: React.ComponentType<ButtonProps> = MuiMaterial?.Button;
+const ButtonGroup: React.ComponentType<ButtonGroupProps> = MuiMaterial?.ButtonGroup;
+const CloseIcon: React.ComponentType<any> = MuiIcons?.Close;
 
 interface AutopilotSettings extends CustomWidgetPlugin {
     /** e.g. 'nmea.0' */
@@ -250,7 +268,6 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
         const fg = dark ? COLORS.contrast : COLORS.contrastLight;
         const bgRing = dark ? '#1B2733' : '#E8EEF3';
         const dimmed = dark ? COLORS.dim : COLORS.dimLight;
-        const cardBg = dark ? COLORS.cardBg : COLORS.cardBgLight;
 
         const showRudder = !compact && this.props.settings.showRudder !== false;
         const showAwa = !compact && this.props.settings.showAwa !== false;
@@ -347,8 +364,6 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
             A ${R_OUTER} ${R_OUTER} 0 0 1 ${CX + R_OUTER} ${CY}
             L ${CX + R_INNER} ${CY}
             A ${R_INNER} ${R_INNER} 0 0 0 ${CX - R_INNER} ${CY} Z`;
-        const innerHalfDisc = `M ${CX - R_INNER} ${CY}
-            A ${R_INNER} ${R_INNER} 0 0 1 ${CX + R_INNER} ${CY} Z`;
 
         // Rudder bar geometry (only computed when shown).
         const rudderCenter = RUDDER_X + RUDDER_W / 2;
