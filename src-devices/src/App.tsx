@@ -55,10 +55,38 @@ interface ChartPreset {
 }
 
 const CHART_PRESETS: ChartPreset[] = [
-    { id: 'chart-aws', tabLabel: 'AWS Chart', stateId: 'windData.windSpeedApparent', label: 'AWS', unit: 'knots' },
-    { id: 'chart-tws', tabLabel: 'TWS Chart', stateId: 'windData.windSpeedTrue', label: 'TWS', unit: 'knots' },
-    { id: 'chart-sog', tabLabel: 'SOG Chart', stateId: 'cogSogRapidUpdate.sog', label: 'SOG', unit: 'knots' },
-    { id: 'chart-stw', tabLabel: 'STW Chart', stateId: 'speed.speedWaterReferenced', label: 'STW', unit: 'knots' },
+    {
+        id: 'chart-aws',
+        tabLabel: 'AWS Chart',
+        stateId: 'nmea.0.windData.windSpeedApparent',
+        label: 'AWS',
+        unit: 'knots',
+        historySeconds: 10,
+    },
+    {
+        id: 'chart-tws',
+        tabLabel: 'TWS Chart',
+        stateId: 'nmea.0.windData.windSpeedTrue',
+        label: 'TWS',
+        unit: 'knots',
+        historySeconds: 20,
+    },
+    {
+        id: 'chart-sog',
+        tabLabel: 'SOG Chart',
+        stateId: 'nmea.0.cogSogRapidUpdate.sog',
+        label: 'SOG',
+        unit: 'knots',
+        historySeconds: 30,
+    },
+    {
+        id: 'chart-stw',
+        tabLabel: 'STW Chart',
+        stateId: 'nmea.0.speed.speedWaterReferenced',
+        label: 'STW',
+        unit: 'knots',
+        historySeconds: 40,
+    },
 ];
 
 const overlayStyle: React.CSSProperties = {
@@ -192,11 +220,12 @@ class DevWindCompass extends NmeaWindCompass {
 }
 
 /**
- * Same trick for the history chart — WidgetGeneric is stubbed in dev, so call the private
+ * The same trick for the history chart — WidgetGeneric is stubbed in dev, so call the private
  * renderChartSvg directly and wrap it in a size-constrained container.
  */
 class DevHistoryChart extends NmeaHistoryChartComponent {
     override render(): React.JSX.Element {
+        console.log('tick');
         const w = Math.min(window.innerWidth - 40, 1100);
         const h = Math.min(window.innerHeight - 120, Math.round(w / 1.5));
         return <div style={{ width: w, height: h }}>{this.renderChartSvg(false)}</div>;
@@ -210,12 +239,14 @@ class DevHistoryChart extends NmeaHistoryChartComponent {
  */
 class DevAisRadar extends NmeaAisRadarComponent {
     override render(): React.JSX.Element {
-        const size = Math.min(window.innerWidth - 40, window.innerHeight - 120, 800);
+        // Fill the available viewport — the radar SVG centres itself within whatever rectangle
+        // we provide, while the Leaflet map underneath uses the full area. Caps so the harness
+        // stays comfortable on huge monitors.
+        const w = Math.min(window.innerWidth - 40, 1600);
+        const h = Math.min(window.innerHeight - 120, 900);
         return (
             <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <div style={{ width: size, height: size }}>
-                    {(this as any).renderRadar('100%', 'dev')}
-                </div>
+                <div style={{ width: w, height: h }}>{(this as any).renderRadar('100%', 'dev')}</div>
             </div>
         );
     }
@@ -254,9 +285,9 @@ class DevAutopilot extends NmeaAutopilotComponent {
 
     private tickSimulation(): void {
         const t = (Date.now() - this.simStart) / 1000;
-        // HDG slowly oscillates around the locked heading so the rotating compass scale moves
+        // HDG slowly oscillates around the locked heading, so the rotating compass scale moves
         // visibly on screen. ±8° ≈ realistic helmsman drift / wave-driven yaw.
-        const heading = ((175 + Math.sin(t / 4) * 8) % 360 + 360) % 360;
+        const heading = (((175 + Math.sin(t / 4) * 8) % 360) + 360) % 360;
         const lockedHeading = 174;
         // AWA wobbles slowly around 35° starboard. Sign toggles every ~12 s so the pointer
         // crosses the bow now and then.
@@ -378,7 +409,7 @@ export default function App(): React.JSX.Element {
     // Lazy initializer so localStorage is only read once on mount, not on every render.
     const [activeTab, setActiveTab] = useState<WidgetTab>(() => loadStoredTab());
 
-    // Persist the tab whenever it changes so a hard-refresh lands on the same widget.
+    // Persist the tab whenever it changes, so a hard-refresh lands on the same widget.
     useEffect(() => {
         try {
             window.localStorage.setItem(ACTIVE_TAB_KEY, activeTab);

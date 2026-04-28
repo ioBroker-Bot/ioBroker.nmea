@@ -1283,6 +1283,20 @@ export class NmeaAdapter extends Adapter {
             if (metaData.round !== undefined) {
                 options.value = Math.round((options.value as number) * metaData.round) / metaData.round;
             }
+            // Sanity bounds — drop the sample if the converted value is outside the field's
+            // realistic physical range. Used e.g. for depth where echo sounders emit huge
+            // out-of-range placeholders (0xFFFFFFFF → ~4.3e9 m) when they lose the bottom; those
+            // would otherwise overwrite the last good reading with bogus data. We return the
+            // false-id sentinel so callers know to skip the writeState() too.
+            const numericValue = options.value as number;
+            if (typeof numericValue === 'number' && Number.isFinite(numericValue)) {
+                if (metaData.min !== undefined && numericValue < metaData.min) {
+                    return { id: false };
+                }
+                if (metaData.max !== undefined && numericValue > metaData.max) {
+                    return { id: false };
+                }
+            }
 
             if (metaData.applyMagneticVariation) {
                 if (this.values[this.config.magneticVariation || 'magneticVariation.variation']) {

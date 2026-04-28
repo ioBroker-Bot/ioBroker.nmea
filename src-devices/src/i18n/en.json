@@ -40,5 +40,7 @@
     "nmeaair_staleMinutes": "Drop targets after (min)",
     "nmeaair_showVectors": "Show COG vectors",
     "nmeaair_vectorMinutes": "Vector length (min)",
-    "nmeaair_courseUp": "Course-Up orientation"
+    "nmeaair_courseUp": "Course-Up orientation",
+    "nmeaair_ownMmsi": "Own vessel MMSI",
+    "nmeaair_ownMmsi_help": "Hide the own AIS transponder from the radar (the boat is already shown at the centre). Leave empty to show all AIS targets."
 }

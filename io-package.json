@@ -184,6 +184,15 @@
                         "de": "Autopilotsteuerung für NMEA"
                     },
                     "icon": "autopilot.png"
+                },
+                {
+                    "name": "NmeaAisRadarComponent",
+                    "label": "NMEA AIS Radar",
+                    "description": {
+                        "en": "AIS Radar",
+                        "de": "AIS Radar"
+                    },
+                    "icon": "aisRadar.png"
                 }
             ]
         },

@@ -3,7 +3,15 @@ import commonjs from 'vite-plugin-commonjs';
 import vitetsConfigPaths from 'vite-tsconfig-paths';
 import { federation } from '@module-federation/vite';
 import { moduleFederationShared } from '@iobroker/dm-widgets/modulefederation.devices.config';
+import path from 'node:path';
 import pack from './package.json';
+
+// `npm run start` (Vite serve) sets command='serve'; production federation build uses 'build'.
+// We re-route `@iobroker/dm-widgets` to a dev wrapper ONLY during serve, so the standalone dev
+// harness gets a fully populated MUI/React bridge without depending on `window.__iobrokerShared__`
+// being set in time. Production builds still resolve to the real package — the federation host
+// supplies the bridge values at runtime.
+const isDevServe = process.env.NODE_ENV !== 'production' && !process.argv.includes('build');
 
 const config = {
     plugins: [
@@ -23,6 +31,19 @@ const config = {
         vitetsConfigPaths(),
         commonjs(),
     ],
+    resolve: isDevServe
+        ? {
+              // Use a regex with `^...$` so we don't accidentally also intercept sub-path
+              // imports like `@iobroker/dm-widgets/modulefederation.devices.config` (used in
+              // this very vite.config above).
+              alias: [
+                  {
+                      find: /^@iobroker\/dm-widgets$/,
+                      replacement: path.resolve(__dirname, 'src/dev-dm-widgets.ts'),
+                  },
+              ],
+          }
+        : undefined,
     server: {
         port: 3000,
         proxy: {

@@ -28,7 +28,7 @@ type SpeedUnit = 'knots' | 'm/s' | 'km/h';
 interface WindCompassSettings extends CustomWidgetPlugin {
     /** e.g. 'nmea.0' */
     instance?: string;
-    /** Seconds of history for min/max wind shift sectors. 0 disables. */
+    /** Seconds of history for min/max wind shift sectors. 0 - disabled. */
     historySeconds?: number;
     /** Display unit for AWS/TWS/SOG. */
     speedUnit?: SpeedUnit;
@@ -121,7 +121,7 @@ const R_LABEL = 390; // middle of the ring
 const R_TICK_OUT = R_OUTER - 4;
 const R_TICK_MAJOR_IN = R_INNER + 4;
 const R_TICK_MINOR_IN = R_INNER + 35;
-const R_HISTORY_OUTER = 340; // slightly inside the dial inner edge
+const R_HISTORY_OUTER = 346; // slightly inside the dial inner edge
 const R_HISTORY_INNER = 120;
 const R_CLOSE_HAULED_OUT = R_OUTER - 6;
 const R_CLOSE_HAULED_IN = R_INNER + 2;
@@ -166,7 +166,7 @@ interface AnimEntry {
 export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompassSettings> {
     private stateHandlers: Map<string, (id: string, state: ioBroker.State | null | undefined) => void> = new Map();
 
-    // Refs on the rotating <g> elements — angle updates are written directly to `transform` attribute.
+    // Refs on the rotating <g> elements — angle updates are written directly to the ` transform ` attribute.
     // Plain objects to sidestep a generic-typing quirk in the dm-widgets React re-export.
     private dialRef: { current: SVGGElement | null } = { current: null };
     private twdRef: { current: SVGGElement | null } = { current: null };
@@ -748,10 +748,10 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                 {/* Wind-shift heat-map (bow-fixed). Each AWA sample from the last `historySeconds` is
                     drawn as a thick radial bar filled with a shared radial gradient whose hot-spot
                     sits about 20 % inside the outer ring; the bar fades out toward the pivot and
-                    outer edge. Per-sample opacity decays linearly with age so the newest reading is
-                    most prominent and the oldest dissolves. Overlapping bars at the same bearing
+                    outer edge. Per-sample opacity decays linearly with age, so the newest reading is
+                    most prominent, and the oldest dissolves. Overlapping bars at the same bearing
                     stack alpha-wise — a quick visual read of where the apparent wind has lingered.
-                    TWA history is intentionally omitted so the map focuses on the "felt" wind. */}
+                    TWA history is intentionally omitted, so the map focuses on the "felt" wind. */}
                 {!compact &&
                     (() => {
                         const windowMs = (this.props.settings.historySeconds ?? DEFAULT_HISTORY_SECONDS) * 1000;
@@ -828,9 +828,9 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                     })()}
 
                 {/* Apparent-wind (bow-relative) pointer — orange "A" arrow, bigger.
-                    Drawn BEFORE the true-wind T-pointer so the smaller T always sits on top of A
+                    Drawn BEFORE the true-wind T-pointer, so the smaller T always sits on top of A
                     when they overlap (same bearing); otherwise A would cover T entirely.
-                    Close-hauled laylines live inside this same rotating group so they always flank
+                    Close-hauled laylines live inside this same rotating group, so they always flank
                     the A pointer at ±closeHauled° (i.e. they track the apparent wind, not the bow). */}
                 {awa != null && (
                     <g ref={this.awaRef}>
@@ -1011,7 +1011,7 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                 })()}
 
                 {/* SOG numeric readout — centered horizontally on the pivot. Unit label sits right
-                    under the digits, dimmer (opacity 0.6) so the number stays the primary read. */}
+                    under the digits, dimmer (opacity 0.6), so the number stays the primary read. */}
                 <text
                     x={CX}
                     y={CY}
@@ -1255,7 +1255,12 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                         padding: isNeumorphicTheme(theme) ? '4px' : '6px',
                     })}
                 >
-                    {indicators}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     <Box sx={{ width: '100%', aspectRatio: '1' }}>{this.renderCompassSvg('100%', true)}</Box>
                     {this.props.settings.name ? (
                         <Typography
@@ -1306,7 +1311,12 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                         px: 2,
                     })}
                 >
-                    {indicators}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     <Box sx={{ textAlign: 'center' }}>
                         <Typography sx={{ fontSize: 12, color: COLORS.orange, fontWeight: 700 }}>AWS</Typography>
                         <Typography sx={{ fontSize: 22, color: COLORS.orange, fontWeight: 800, lineHeight: 1 }}>
@@ -1357,7 +1367,12 @@ export class NmeaWindCompass extends WidgetGeneric<WindCompassState, WindCompass
                         padding: isNeumorphicTheme(theme) ? '8px' : '12px',
                     })}
                 >
-                    {indicators}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     <Box sx={{ aspectRatio: '1', height: '100%', maxHeight: 280 }}>{this.renderCompassSvg('100%')}</Box>
                     {this.props.settings.name ? (
                         <Box sx={{ position: 'absolute', bottom: 6, left: 0, right: 0, textAlign: 'center' }}>

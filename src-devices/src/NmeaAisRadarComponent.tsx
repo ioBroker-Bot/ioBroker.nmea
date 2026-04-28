@@ -16,6 +16,7 @@ import WidgetGeneric, {
     React,
     MuiMaterial,
     MuiIcons,
+    moment,
     getTileStyles,
     isNeumorphicTheme,
     type WidgetGenericProps,
@@ -32,15 +33,15 @@ import type {
     ToggleButtonGroupProps,
 } from '@mui/material';
 import type { ConfigItemPanel, ConfigItemTabs } from '@iobroker/json-config';
-// Leaflet renders the chart base layer behind the SVG overlay. Imported as a side-effect
-// for the CSS so the map container gets the default sizing/cursor behaviour.
+// Leaflet renders the chart base layer behind the SVG overlay. Imported as a side effect
+// for the CSS, so the map container gets the default sizing/cursor behaviour.
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 // Same MUI bridge resolution as the other widgets (NmeaAutopilot / NmeaWind / NmeaHistoryChart):
 // pull components from the host-shared `window.__iobrokerShared__` via `@iobroker/dm-widgets`,
 // not via direct `@mui/material` imports. Keeps all plugins on the same React/MUI instance as
-// the host so there's no dual-instance hazard. The dev harness shims the global in dev-shim.ts.
+// the host, so there's no dual-instance hazard. The dev harness shims the global in dev-shim.ts.
 const Box: React.ComponentType<BoxProps> = MuiMaterial?.Box;
 const Typography: React.ComponentType<TypographyProps> = MuiMaterial?.Typography;
 const Dialog: React.ComponentType<DialogProps> = MuiMaterial?.Dialog;
@@ -65,13 +66,19 @@ interface AisRadarSettings extends CustomWidgetPlugin {
     courseUp?: boolean;
     /** Drop targets that haven't reported within this many minutes (1..60). */
     staleMinutes?: number;
+    /**
+     * Own vessel's MMSI — when the local AIS transponder broadcasts the own position, the
+     *  adapter creates a target for it just like any other. Filling this in suppresses that
+     *  duplicate so the dial only shows actual neighbours instead of the boat-in-itself.
+     */
+    ownMmsi?: string;
 }
 
 interface AisTarget {
     mmsi: string;
     lat: number;
     lon: number;
-    /** Course over ground in degrees (0..360, true). May be NaN/undefined for stationary. */
+    /** Course over ground in degrees (0..360, true). Maybe NaN/undefined for stationary. */
     cog: number;
     /** Speed over ground in knots. */
     sog: number;
@@ -83,7 +90,7 @@ interface AisTarget {
     name: string | null;
     /** Last update wall clock (ms). */
     lastSeen: number;
-    /** Recent positions kept for the trail rendering — last point is `(lat, lon)` itself. */
+    /** Recent positions kept for the trail rendering — the last point is `(lat, lon)` itself. */
     trail: { lat: number; lon: number; ts: number }[];
 }
 
@@ -95,7 +102,7 @@ const TRAIL_MAX_AGE_MS = 30 * 60_000;
 /**
  * Deterministic per-MMSI hue. Uses a simple 32-bit polynomial hash so two adjacent MMSIs
  * (e.g. 211215360 / 211215361) land far apart on the colour wheel — important so neighbours'
- * tracks don't blur into each other on a busy radar. Saturation/lightness chosen so the
+ * tracks don't blur into each other on a busy radar. Saturation/ lightness are chosen so the
  * chevron and trail stay readable against both the dark map and the radial vignette.
  */
 function shipColor(mmsi: string): string {
@@ -125,12 +132,12 @@ const DEFAULT_VECTOR_MINUTES = 6;
 const DEFAULT_STALE_MINUTES = 10;
 const DEFAULT_SHOW_VECTORS = true;
 const DEFAULT_COURSE_UP = false;
-// Minimum zoom is 1 NM — narrower than that and individual AIS positions would jitter visibly
+// Minimum zoom is 1 NM — narrower than that, and individual AIS positions would jitter visibly
 // inside the dial just from GPS noise. Maximum 48 NM keeps tile-load latency reasonable.
 const RANGE_PRESETS_NM = [1, 1.5, 2, 3, 6, 12, 24, 48];
 
 // Earth radius (meters) for the equirectangular projection. Accurate enough for ranges
-// well below 100 NM where curvature error stays in the cm range — perfect for a radar plot.
+// well below 100 NM where the curvature error stays in the cm range — perfect for a radar plot.
 const EARTH_RADIUS_M = 6_371_000;
 const M_PER_NM = 1852;
 const RAD = Math.PI / 180;
@@ -157,6 +164,15 @@ const CENTER = VIEWBOX / 2;
 const R_OUTER = 470; // outermost ring radius
 const RING_FRACTIONS = [0.25, 0.5, 0.75, 1.0];
 
+// In Course-Up mode the Leaflet map is rotated by `-ownHeading` degrees so the bow always
+// points up. A square rotated 45° fills only its inscribed circle (radius = side/2) of its
+// original area; the corners that stuck out before are now empty. To keep the radar's
+// visible circle (parent's circular `overflow: hidden`) covered with tiles regardless of
+// rotation, we render the map div LARGER than the container by this factor. 1.45× gives
+// headroom even at 45° (where the map needs sqrt(2) ≈ 1.414× to fully cover the rotated
+// square) plus a small safety margin against tile-edge artefacts.
+const MAP_OVERSIZE_FACTOR = 1.45;
+
 /** AIS class lookup. The state-channel name encodes the source PGN, which maps to the type. */
 function classifyAisChannel(channelId: string): AisTarget['cls'] {
     if (channelId.includes('aisAidsToNavigation')) {
@@ -172,6 +188,41 @@ function classifyAisChannel(channelId: string): AisTarget['cls'] {
         return 'B';
     }
     return 'Other';
+}
+
+/**
+ * Format a wall-clock timestamp into a short relative string for the hover tooltip.
+ *
+ * Uses the host-shared `moment` instance (resolved from `window.__iobrokerShared__.moment` via
+ * the dm-widgets bridge), so the localised "ago" phrasing matches the rest of the
+ * ioBroker.devices UI ("vor 5 Minuten", "5 minutes ago", etc.). For timestamps older than
+ * 24 h we switch to an absolute clock time which is more useful at a glance than "vor 23
+ * Stunden". Falls back to a JS Date string if the moment is unavailable (shouldn't happen in
+ * the host shell but keeps the dev harness sane if the shim is mis-wired).
+ */
+function formatLastSeen(ts: number, now: number): string {
+    const ageMs = Math.max(0, now - ts);
+    if (typeof moment === 'function') {
+        if (ageMs < 86_400_000) {
+            return moment(ts).fromNow();
+        }
+        return moment(ts).format('HH:mm:ss');
+    }
+    // Bridge missing → safe fallback that doesn't depend on locale/moment.
+    if (ageMs < 60_000) {
+        return `${Math.round(ageMs / 1000)} s ago`;
+    }
+    if (ageMs < 3_600_000) {
+        return `${Math.round(ageMs / 60_000)} min ago`;
+    }
+    if (ageMs < 86_400_000) {
+        return `${Math.round(ageMs / 3_600_000)} h ago`;
+    }
+    try {
+        return new Date(ts).toLocaleTimeString();
+    } catch {
+        return new Date(ts).toISOString();
+    }
 }
 
 /**
@@ -193,15 +244,17 @@ function projectToMeters(lat: number, lon: number, refLat: number, refLon: numbe
 export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState, AisRadarSettings> {
     private stateHandlers = new Map<string, (id: string, state: ioBroker.State | null | undefined) => void>();
     private aisChannels = new Set<string>();
-    /** Leaflet map instances — one per render variant (compact tile, wide-tall tile, dialog).
+    /**
+     * Leaflet map instances — one per render variant (compact tile, wide-tall tile, dialog).
      *  Each rendered radar gets its own map because Leaflet binds tightly to its container DOM,
      *  and we render the SVG into different containers per variant. The instance is keyed by a
-     *  deterministic suffix supplied by the caller (renderRadar(...)). */
+     *  deterministic suffix supplied by the caller (renderRadar(...)).
+     */
     private maps = new Map<string, L.Map>();
     /** Container divs are written into via React refs (see renderRadar). */
     private mapContainers = new Map<string, HTMLDivElement | null>();
     /**
-     * Stable ref callbacks per key — recreated only on first render for a key, then reused.
+     * Stable ref callbacks per key — recreated only on the first render for a key, then reused.
      *  Without this, an inline `ref={el => this.attachMap(key, el)}` would have a fresh
      *  identity every render → React would call it with null (unmount old) then with the new
      *  element (mount), tearing the Leaflet map down + back up on every render and causing a
@@ -218,6 +271,15 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
     /** Timer that restores the default range after a period without wheel activity. */
     private wheelResetTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly WHEEL_RESET_MS = 15_000;
+    /**
+     * Last lat/lon/range we synced the maps to. We re-sync only when the position changes by
+     *  more than a meaningful threshold — without this the maps re-fit on every GPS sample
+     *  (sub-meter jitter at 1 Hz), and each fit re-paints the tile transform, which a stationary
+     *  user sees as a constant subtle flicker.
+     */
+    private lastSyncedLat: number | null = null;
+    private lastSyncedLon: number | null = null;
+    private lastSyncedRange: number | null = null;
 
     constructor(props: WidgetGenericProps<AisRadarSettings>) {
         super(props);
@@ -284,6 +346,13 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                         default: DEFAULT_COURSE_UP,
                         sm: 6,
                     },
+                    ownMmsi: {
+                        type: 'text',
+                        label: 'nmeaair_ownMmsi',
+                        help: 'nmeaair_ownMmsi_help',
+                        default: '',
+                        sm: 12,
+                    },
                 },
             },
         };
@@ -309,13 +378,14 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
             this.subscribeOwnShip();
             void this.discoverAndSubscribeAis();
         }
-        // Re-sync Leaflet maps whenever the own position or chosen range changes.
-        if (
-            prevState.ownLat !== this.state.ownLat ||
-            prevState.ownLon !== this.state.ownLon ||
-            prevState.rangeNm !== this.state.rangeNm
-        ) {
-            this.syncAllMaps();
+        // Re-sync Leaflet maps whenever the own position or chosen range changes. Range
+        // changes force a sync on every map (zoom must always take effect, even on the dialog
+        // map when a compact tile is also visible); position changes go through the normal
+        // jitter threshold, so a stationary GPS doesn't trigger constant re-fits.
+        if (prevState.rangeNm !== this.state.rangeNm) {
+            this.syncAllMaps(true);
+        } else if (prevState.ownLat !== this.state.ownLat || prevState.ownLon !== this.state.ownLon) {
+            this.syncAllMaps(false);
         }
     }
 
@@ -356,7 +426,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
     /**
      * Stable ref callback for the outer radar wrapper. Attaches a non-passive `wheel` listener
      * so we can call `preventDefault()` and treat the wheel as a zoom action instead of a page
-     * scroll. React's synthetic onWheel is passive by default in modern browsers, which makes
+     * scroll. React's synthetic onWheel is a passive by default in modern browsers, which makes
      * `preventDefault` a no-op; only a raw addEventListener with `passive: false` works.
      */
     private getWrapperRef(key: string): (el: HTMLDivElement | null) => void {
@@ -511,7 +581,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
             const targets = new Map(prev.targets);
             const existing = targets.get(mmsi);
             const ts = state.ts || Date.now();
-            // Trail: append latest point, drop anything older than TRAIL_MAX_AGE_MS, cap length.
+            // Trail: append the latest point, drop anything older than TRAIL_MAX_AGE_MS, cap length.
             // Reuse the previous trail array's tail (sliced) so identity changes only when a
             // sample is added or expired — React still sees a new outer array reference, which
             // is enough to trigger a render but doesn't waste CPU on every position update.
@@ -535,7 +605,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                 sog,
                 heading,
                 cls,
-                // Preserve the previously-known name if a position-only update doesn't include it.
+                // Preserve the previously known name if a position-only update doesn't include it.
                 name: name || existing?.name || null,
                 lastSeen: ts,
                 trail,
@@ -577,6 +647,16 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
      * each Leaflet instance binds to a separate container.
      */
     private renderRadar(size: number | string, key: string): React.JSX.Element {
+        // Course-Up rotation amount applied to the map. Mirrors the SVG's `upRotation` so the
+        // base-layer chart rotates in lockstep with the rings/cardinals. North-Up keeps the
+        // map static (heading=0). Heading is missing (no GPS heading available) → also static.
+        const { courseUp, ownHeading } = this.state;
+        const mapRotationDeg = courseUp && ownHeading != null ? -ownHeading : 0;
+        // Map div is sized larger than the visible radar circle, so its corners always cover
+        // the inscribed circle even when rotated. See MAP_OVERSIZE_FACTOR comment.
+        const oversize = MAP_OVERSIZE_FACTOR;
+        const overhangPct = -((oversize - 1) / 2) * 100;
+
         return (
             <Box
                 ref={this.getWrapperRef(key)}
@@ -584,22 +664,48 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                     position: 'relative',
                     width: size === '100%' ? '100%' : size,
                     height: size === '100%' ? '100%' : size,
-                    aspectRatio: '1',
-                    borderRadius: '50%',
+                    // No aspectRatio constraint or circular border-radius: the wrapper takes
+                    // whatever rectangle the parent layout gives, the Leaflet map fills it
+                    // entirely, and the radar SVG (square viewBox, preserveAspectRatio=meet)
+                    // letterboxes to the smaller dimension and centres itself. The result is a
+                    // map that uses the full available area with the radar circle floating in
+                    // the middle — much more useful than a cropped circular disc.
                     overflow: 'hidden',
                     isolation: 'isolate',
-                    // Subtle outer glow that frames the radar against the surrounding card.
+                    // Subtle inset outline frames the widget against the surrounding card.
                     boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.08)',
                 }}
             >
-                {/* Leaflet base layer. The map container fills the radar disc; the circular
-                    `overflow: hidden` on the parent crops the rectangular tile grid into the
-                    radar shape so the dial silhouette stays clean. */}
+                {/* Leaflet base layer. The map container fills the entire wrapper rectangle;
+                    `overflow: hidden` on the parent clips the oversized map div (which is
+                    larger than the wrapper to handle Course-Up rotation) to the visible area. */}
                 <div
                     ref={this.getMapRef(key)}
                     style={{
                         position: 'absolute',
-                        inset: 0,
+                        // Oversized + centred via negative margins, so a rotation by any angle
+                        // still leaves the inscribed circle (= the radar's visible disc) fully
+                        // covered by tiles. With inset:0 alone, a 45° rotation would expose
+                        // empty corners.
+                        width: `${oversize * 100}%`,
+                        height: `${oversize * 100}%`,
+                        top: `${overhangPct}%`,
+                        left: `${overhangPct}%`,
+                        // Course-Up rotation — applied ONLY when actually rotating, so the
+                        // browser doesn't keep `transition: transform` armed in North-Up mode
+                        // (which would interpret every re-render's identical transform as a
+                        // potential animation and trigger composite re-paints, visible as a
+                        // flicker on small tiles where each repaint is more conspicuous).
+                        // CSS transform-origin defaults to the element's centre, which is also
+                        // the radar centre because the div is centred via the symmetric
+                        // overhang offsets above.
+                        ...(mapRotationDeg !== 0
+                            ? {
+                                  transform: `rotate(${mapRotationDeg}deg)`,
+                                  transformOrigin: '50% 50%',
+                                  transition: 'transform 0.4s linear',
+                              }
+                            : {}),
                         // CartoDB Dark Matter tiles look almost monochrome; bump saturation a hair
                         // so the small landmasses stand out against the water without becoming
                         // distracting under the SVG overlay.
@@ -651,6 +757,15 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
             keyboard: false,
             touchZoom: false,
             zoomAnimation: true,
+            // CRITICAL for scale accuracy: by default, Leaflet rounds zoom to integer levels.
+            // Our `fitBounds` requests an exact rangeM-square box; the rounded zoom would land
+            // 0..1 zoom level lower than ideal, which is up to a factor of 2 in map area —
+            // i.e. the chart would show TWICE as much terrain as the radar rings claim.
+            // Result: the own-ship icon (drawn at the SVG centre) ends up over land that's
+            // actually further away than rangeNm. With zoomSnap:0 Leaflet picks any fractional
+            // zoom that fits the bounds exactly, so map and radar share a perfect 1:1 scale.
+            zoomSnap: 0,
+            zoomDelta: 0.25,
         });
         // CartoDB Dark Matter — desaturated dark base, free, ideal under a marine overlay.
         // Subdomain rotation prevents browser per-host TCP throttling.
@@ -667,11 +782,26 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
         // Force a layout invalidation after the container actually has a size — Leaflet caches
         // dimensions and otherwise renders blank inside flexbox children.
         requestAnimationFrame(() => map.invalidateSize());
-        this.syncMapView(key);
+        // Force-sync because the freshly-attached map starts at default view (lat 0, zoom 2)
+        // and bypasses the jitter threshold check.
+        this.syncMapView(key, true);
     }
 
-    /** Re-centre / re-zoom one map (called whenever ownLat/ownLon/range change). */
-    private syncMapView(key: string): void {
+    /**
+     * Threshold below which a position change is treated as GPS jitter and ignored. 1e-5° of
+     * latitude ≈ 1.1 m at any latitude; that's well under the noise floor of consumer GPS
+     * but big enough that the 6 NM dial doesn't visibly scroll for any sub-pixel correction.
+     */
+    private static readonly POSITION_RESYNC_THRESHOLD_DEG = 1e-5;
+
+    /**
+     * Re-centre / re-zoom a single map to the current own-ship position and range. `force`
+     * bypasses the jitter threshold and is used by `attachMap` for the initial sync of a
+     * freshly-mounted map. The shared `syncAllMaps()` entry point applies the threshold
+     * across all maps so a stationary GPS doesn't trigger the fit-and-redraw cycle every
+     * second (which is what was causing the visible flicker).
+     */
+    private syncMapView(key: string, force = false): void {
         const map = this.maps.get(key);
         if (!map) {
             return;
@@ -681,10 +811,37 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
             return;
         }
         const rangeNm = this.getRange();
+        if (!force) {
+            const threshold = NmeaAisRadarComponent.POSITION_RESYNC_THRESHOLD_DEG;
+            if (
+                this.lastSyncedLat != null &&
+                this.lastSyncedLon != null &&
+                this.lastSyncedRange === rangeNm &&
+                Math.abs(ownLat - this.lastSyncedLat) < threshold &&
+                Math.abs(ownLon - this.lastSyncedLon) < threshold
+            ) {
+                return;
+            }
+        }
+        this.lastSyncedLat = ownLat;
+        this.lastSyncedLon = ownLon;
+        this.lastSyncedRange = rangeNm;
         const rangeM = rangeNm * M_PER_NM;
-        // Convert range-in-meters to a lat/lon delta and ask Leaflet to fit the bounds.
-        const latDelta = (rangeM / EARTH_RADIUS_M) * DEG;
-        const lonDelta = (rangeM / (EARTH_RADIUS_M * Math.cos(ownLat * RAD))) * DEG;
+        // Bounds scaling so the radar's outer ring (drawn at R_OUTER in viewBox) corresponds
+        // to ±rangeM on the underlying map.
+        //   • The SVG occupies 100 % of the container; outer ring at R_OUTER / (VIEWBOX/2) of
+        //     half-container width.
+        //   • The Leaflet map div is MAP_OVERSIZE_FACTOR (~1.45) × the container — needed so a
+        //     Course-Up rotation never exposes empty corners.
+        //   • fitBounds maps ±boundsM to the map div's half-width = (MAP_OVERSIZE_FACTOR / 2)
+        //     × container.
+        // Solving for boundsM so ±rangeM lands at the radar ring offset:
+        //   boundsM = rangeM × (MAP_OVERSIZE_FACTOR / 2) ÷ (R_OUTER / VIEWBOX)
+        //          = rangeM × (MAP_OVERSIZE_FACTOR × VIEWBOX) / (2 × R_OUTER)
+        const scaleToRing = (MAP_OVERSIZE_FACTOR * VIEWBOX) / (2 * R_OUTER);
+        const effRangeM = rangeM * scaleToRing;
+        const latDelta = (effRangeM / EARTH_RADIUS_M) * DEG;
+        const lonDelta = (effRangeM / (EARTH_RADIUS_M * Math.cos(ownLat * RAD))) * DEG;
         const bounds = L.latLngBounds(
             L.latLng(ownLat - latDelta, ownLon - lonDelta),
             L.latLng(ownLat + latDelta, ownLon + lonDelta),
@@ -692,10 +849,19 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
         map.fitBounds(bounds, { animate: false, padding: [0, 0] });
     }
 
-    /** Sync ALL active maps after a state/range change. */
-    private syncAllMaps(): void {
+    /**
+     * Sync ALL active maps after a state/range change.
+     *
+     * `force=true` bypasses the per-map jitter threshold — used when the change is intentional
+     * (range step from wheel/buttons), not GPS noise. Without force, only the first map in the
+     * iteration would actually re-fit: the first call to syncMapView updates `lastSyncedRange`
+     * to the new value, and subsequent maps would then see `lastSyncedRange === rangeNm` (and
+     * unchanged position) and skip. So a wheel-zoom with multiple maps mounted (e.g. dialog
+     * open over compact tile) would only zoom one of them.
+     */
+    private syncAllMaps(force = false): void {
         for (const key of this.maps.keys()) {
-            this.syncMapView(key);
+            this.syncMapView(key, force);
         }
     }
 
@@ -712,11 +878,22 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
         // Concentric rings + cardinal labels.
         const rings = RING_FRACTIONS.map(f => ({ r: R_OUTER * f, label: (rangeNm * f).toFixed(f === 1 ? 0 : 1) }));
 
+        // Own MMSI to suppress — empty string / whitespace = no filter. Stored as a normalised
+        //  string, so a numeric vs string MMSI doesn't trip the comparison.
+        const ownMmsiSetting = (this.props.settings.ownMmsi ?? '').trim();
+        const ownMmsiKey = ownMmsiSetting || null;
+
         // Filter targets within range and not stale.
         const plotted: { t: AisTarget; x: number; y: number; vx: number; vy: number }[] = [];
         if (ownLat != null && ownLon != null) {
             for (const t of targets.values()) {
                 if (now - t.lastSeen > staleMs) {
+                    continue;
+                }
+                // Skip the user's own AIS broadcast — the boat is already drawn at the centre
+                // by the own-ship indicator; showing the same position again as an AIS target
+                // just stacks two icons on top of each other.
+                if (ownMmsiKey && t.mmsi === ownMmsiKey) {
                     continue;
                 }
                 const { east, north } = projectToMeters(t.lat, t.lon, ownLat, ownLon);
@@ -889,9 +1066,37 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                             trailPoints = parts.join(' ');
                         }
 
+                        // Hover the tooltip text — name (if known) followed by MMSI and a short
+                        // status line. The browser's native `<title>`-driven tooltip kicks in
+                        // automatically when the user hovers the target's group.
+                        const hoverLines: string[] = [];
+                        if (t.name) {
+                            hoverLines.push(t.name);
+                        }
+                        hoverLines.push(`MMSI ${t.mmsi}`);
+                        if (isFinite(t.cog)) {
+                            hoverLines.push(`COG ${Math.round(t.cog)}°`);
+                        }
+                        if (t.sog > 0.1) {
+                            hoverLines.push(`SOG ${t.sog.toFixed(1)} kn`);
+                        }
+                        // "last seen" — relative for fresh updates, absolute clock time for older
+                        // ones. Computed at render time, so the value is current to within the
+                        // most recent render (a few seconds for active targets).
+                        hoverLines.push(`seen ${formatLastSeen(t.lastSeen, now)}`);
                         return (
-                            <g key={t.mmsi}>
-                                {/* Trail behind everything else so the chevron + COG vector sit on top. */}
+                            <g
+                                key={t.mmsi}
+                                // Re-enable pointer events for this target only — the parent SVG
+                                // overlay sets pointer-events:none so the Leaflet map below can
+                                // be panned through empty radar areas. This local override means
+                                // hovering exactly over the chevron/trail still triggers the
+                                // browser-native <title> tooltip without blocking map gestures
+                                // elsewhere.
+                                style={{ pointerEvents: 'auto', cursor: 'help' }}
+                            >
+                                <title>{hoverLines.join(' · ')}</title>
+                                {/* Trail behind everything else, so the chevron + COG vector sit on top. */}
                                 {trailPoints ? (
                                     <polyline
                                         points={trailPoints}
@@ -938,19 +1143,9 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                                         />
                                     )}
                                 </g>
-                                {t.name ? (
-                                    <text
-                                        x={cx + 12}
-                                        y={cy + 4}
-                                        fill={color}
-                                        fontSize={14}
-                                        fontFamily="Roboto, Arial, sans-serif"
-                                        opacity={0.9}
-                                        transform={`rotate(${-upRotation} ${cx + 12} ${cy + 4})`}
-                                    >
-                                        {t.name.slice(0, 12)}
-                                    </text>
-                                ) : null}
+                                {/* Static name label removed — the hover-tooltip via <title>
+                                    above replaces it, keeping the radar plot uncluttered when
+                                    many targets are nearby. */}
                             </g>
                         );
                     })}
@@ -1061,7 +1256,18 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                         padding: isNeumorphicTheme(theme) ? '4px' : '6px',
                     })}
                 >
-                    {indicators}
+                    {/* Plain <div> wrapper so click events on the settings gear / info icons
+                        inside `indicators` don't bubble up to the wrapper's onClick (which
+                        would otherwise open the widget's full-screen dialog and either layer
+                        on top of the host's settings dialog or swallow it). A bare <div> is
+                        used (instead of <Box>) to avoid any extra MUI emotion-class generation
+                        that could trigger a re-paint and cause subtle flicker on small tiles. */}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     <Box sx={{ width: '100%', aspectRatio: '1' }}>{this.renderRadar('100%', 'compact')}</Box>
                     {this.props.settings.name ? (
                         <Typography
@@ -1101,8 +1307,24 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                         padding: isNeumorphicTheme(theme) ? '8px' : '12px',
                     })}
                 >
-                    {indicators}
-                    <Box sx={{ height: '100%', aspectRatio: '1' }}>{this.renderRadar('100%', 'widetall')}</Box>
+                    {/* Plain <div> wrapper so click events on the settings gear / info icons
+                        inside `indicators` don't bubble up to the wrapper's onClick (which
+                        would otherwise open the widget's full-screen dialog and either layer
+                        on top of the host's settings dialog or swallow it). A bare <div> is
+                        used (instead of <Box>) to avoid any extra MUI emotion-class generation
+                        that could trigger a re-paint and cause subtle flicker on small tiles. */}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
+                    {/* WideTall radar: drop the aspectRatio constraint so the map uses the full
+                        2×1 tile area; the radar circle stays centred via the SVG's
+                        preserveAspectRatio=meet. */}
+                    <Box sx={{ width: '100%', height: '100%' }}>
+                        {this.renderRadar('100%', 'widetall')}
+                    </Box>
                 </Box>
             </Box>
         );
@@ -1192,7 +1414,9 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                         overflow: 'hidden',
                     }}
                 >
-                    <Box sx={{ aspectRatio: '1', height: '100%', maxWidth: '100%' }}>
+                    {/* Dialog: take the full available content area (width × height); the SVG
+                        floats centred while the map maximises useful chart real estate. */}
+                    <Box sx={{ width: '100%', height: '100%' }}>
                         {this.renderRadar('100%', 'dialog')}
                     </Box>
                 </DialogContent>

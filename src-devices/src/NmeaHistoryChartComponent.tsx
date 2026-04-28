@@ -43,7 +43,7 @@ interface HistoryChartSettings extends CustomWidgetPlugin {
     yMax?: number;
     /**
      * If true, `yMin`/`yMax` are only suggested bounds — the axis expands whenever the data exceeds them.
-     *  If false, the axis is clamped to `[yMin, yMax]` exactly and out-of-range values are clipped.
+     *  If false, the axis is clamped to `[yMin, yMax]` exactly, and out-of-range values are clipped.
      */
     autoScale?: boolean;
     /** Decimal places for the readout and min/avg/max labels. */
@@ -55,7 +55,7 @@ interface HistoryChartSettings extends CustomWidgetPlugin {
 }
 
 interface HistoryChartState extends WidgetGenericState {
-    samples: { val: number; ts: number }[];
+    samples: { val: number; ts: number; tss?: string }[];
     current: number | null;
     dialogOpen: boolean;
 }
@@ -95,6 +95,23 @@ function formatNum(val: number | null, decimals: number, isFloatComma?: boolean)
     const s = val.toFixed(decimals);
     return isFloatComma ? s.replace('.', ',') : s;
 }
+
+// Empty-state text shown when the chart hasn't received any samples yet within the visible
+// window. Keyed by `ioBroker.Languages` so `WidgetGeneric.getText()` can pick the user's locale
+// at render time. Languages we don't ship a translation for fall back to the English string.
+const WAITING_FOR_SAMPLES: Partial<Record<ioBroker.Languages, string>> & { en: string } = {
+    en: 'waiting for samples…',
+    de: 'warte auf Werte…',
+    ru: 'ожидание данных…',
+    fr: 'en attente de données…',
+    es: 'esperando datos…',
+    it: 'in attesa di dati…',
+    nl: 'wachten op gegevens…',
+    pl: 'oczekiwanie na dane…',
+    pt: 'aguardando dados…',
+    uk: 'очікування даних…',
+    'zh-cn': '等待样本…',
+};
 
 export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, HistoryChartSettings> {
     private stateHandler: ((id: string, state: ioBroker.State | null | undefined) => void) | null = null;
@@ -212,6 +229,15 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
         // ioBroker publishes a new sample; this interval is purely for the time-axis animation.
         this.tickInterval = setInterval(() => {
             if (this.state.samples.length > 0) {
+                if (Date.now() - this.state.samples[this.state.samples.length - 1].ts > 2000) {
+                    // Repeat last value
+                    this.setState(s => {
+                        return {
+                            samples: [...s.samples, { val: s.samples[s.samples.length - 1].val, ts: Date.now() }],
+                        };
+                    });
+                    return;
+                }
                 this.forceUpdate();
             }
         }, 100);
@@ -251,18 +277,37 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                 return;
             }
             const ts = state.ts || Date.now();
+            if (this.state.samples.length && ts <= this.state.samples[this.state.samples.length - 1].ts) {
+                return;
+            }
             this.setState(s => {
                 const windowMs = (this.props.settings.historySeconds ?? DEFAULT_HISTORY_SECONDS) * 1000;
                 const cutoff = Date.now() - windowMs;
+                // Find first value outside window and hold it for calculations
+                let beforeFirst: { val: number; ts: number } | undefined;
+                for (const v of s.samples) {
+                    if (v.ts >= cutoff) {
+                        break;
+                    }
+                    beforeFirst = v;
+                }
                 const trimmed = s.samples.filter(x => x.ts >= cutoff);
+                const samples = [...trimmed];
+                if (!samples.length || ts > samples[samples.length - 1].ts) {
+                    samples.push({ val, ts });
+                }
+                if (beforeFirst) {
+                    samples.unshift(beforeFirst);
+                }
+
                 return {
-                    samples: [...trimmed, { val, ts }],
+                    samples,
                     current: val,
                 } as HistoryChartState;
             });
         };
         this.props.stateContext.getState(this.subscribedId, this.stateHandler);
-        // Background-load historical samples so the chart isn't empty on first paint — but only
+        // Background-load historical samples, so the chart isn't empty on first paint — but only
         // when the object opts into a default history adapter via `common.custom[defaultHistory]`.
         void this.prefillFromHistory(this.subscribedId);
     }
@@ -317,7 +362,7 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
             if (historical.length === 0) {
                 return;
             }
-            // Merge with live samples that may have arrived meanwhile, de-duplicating by timestamp
+            // Merge with live samples that may have arrived, meanwhile, de-duplicating by timestamp
             // and keeping the array sorted ascending so the renderer can walk it left-to-right.
             this.setState(s => {
                 const seen = new Set(s.samples.map(x => x.ts));
@@ -366,15 +411,37 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
         const chartWidth = chartRight - chartLeft;
         const chartHeight = chartBottom - chartTop;
 
-        // Anchor the chart's right edge to the latest sample's timestamp instead of `Date.now()`
-        // so the latest sample sits exactly on chartRight. Avoids the "tip flicker" where the
-        // hold-last-value extension grows between samples and then snaps back when a new sample
-        // arrives — the rightmost line segment was visibly jumping each time. Between samples
-        // the chart simply doesn't move; on each new sample everything shifts left in one step.
+        // Right edge of the chart = "now". Combined with the 100 ms render tick (started in
+        // componentDidMount), the chart axis scrolls left smoothly between samples instead of
+        // jumping forward only when a new sample arrives. The earlier "tip flicker" issue is
+        // avoided by simply NOT drawing a hold-last-value extension to chartRight — the
+        // polyline ends at the last actual sample. As "now" advances, the last sample slides
+        // leftward at the same rate as the rest, leaving a small open gap on the right that
+        // fills again the moment a new sample arrives. Smooth scrolling, no fake tip, no flicker.
         const now = Date.now();
-        const endMs = samples.length > 0 ? samples[samples.length - 1].ts : now;
+        const endMs = now;
         const startMs = endMs - windowMs;
         const active = samples.filter(s => s.ts >= startMs);
+
+        let beforeFirst: { val: number; ts: number } | undefined;
+        for (const v of samples) {
+            if (v.ts >= startMs) {
+                break;
+            }
+            beforeFirst = v;
+        }
+
+        // Get the last value and use it as actual one
+        if (samples.length && samples[samples.length - 1].ts < endMs) {
+            active.push({ val: samples[samples.length - 1].val, ts: endMs });
+        }
+
+        // Interpolate value between afterLast and samples[0]
+        if (beforeFirst && active[0] && beforeFirst.ts < active[0].ts) {
+            const ratio = (startMs - beforeFirst.ts) / (active[0].ts - beforeFirst.ts);
+            const interpolated = (active[0].val - beforeFirst.val) * ratio;
+            active.unshift({ val: interpolated + beforeFirst.val, ts: startMs });
+        }
 
         // ---- Data min / avg / max over the visible window ----
         let dataMin: number | null = null;
@@ -424,22 +491,69 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
             chartBottom - ((Math.max(yMin, Math.min(yMax, val)) - yMin) / yRange) * chartHeight;
 
         // ---- Poly points / area path ----
-        // No hold-last-value extension: the chart's right edge is anchored to the latest sample's
-        // timestamp (see endMs above), so the latest sample is exactly at chartRight. The line
-        // stays continuous from chartLeft to chartRight without an artificial flat tail.
+        // Smooth (linearly interpolated) line through the samples. Each sample becomes one
+        // polyline vertex; SVG draws straight segments between consecutive vertices, so the
+        // line slopes between values rather than stepping. After the loop we extend
+        // horizontally from the latest sample to chartRight (= now), so the chart's tip stays
+        // glued to the right edge between samples — the value is "held" until the next sample
+        // arrives, but only the FINAL hold (between last sample and now) is drawn as flat;
+        // intermediate samples connect smoothly.
+        //
+        // `pushPoint` deduplicates consecutive identical points, so a sample arriving exactly
+        // at `now` doesn't spawn a zero-length stroke segment that would render as a visible
+        // round-cap dot at the tip.
         const lineParts: string[] = [];
+        const pushPoint = (x: number, y: number): void => {
+            const xs = x.toFixed(1);
+            const ys = y.toFixed(1);
+            const last = lineParts[lineParts.length - 1];
+            if (last === `${xs},${ys}`) {
+                return;
+            }
+            lineParts.push(`${xs},${ys}`);
+        };
         for (let i = 0; i < active.length; i++) {
             const s = active[i];
-            lineParts.push(`${xFor(s.ts).toFixed(1)},${yFor(s.val).toFixed(1)}`);
+            pushPoint(xFor(s.ts), yFor(s.val));
+        }
+        if (active.length > 0) {
+            const lastSample = active[active.length - 1];
+            pushPoint(xFor(now), yFor(lastSample.val));
         }
         const polyline = lineParts.join(' ');
 
-        // Close the area polygon from the baseline (chartBottom) up through the samples.
+        // Close the area polygon from the baseline (chartBottom) up through the samples plus
+        // the optional hold-last-value extension. The area is extended on BOTH sides by
+        // `LINE_HALF_WIDTH` so the polyline's round-cap (which sits half-stroke beyond the
+        // first/last sample x) stays fully on top of the filled area instead of poking out
+        // unfilled. Visually: the line never "sticks out" past the shaded body at the chart
+        // start or end.
+        const LINE_HALF_WIDTH = 2; // strokeWidth=4 → cap radius ≈ 2 px
         let areaPath = '';
         if (active.length > 0) {
-            const firstX = xFor(active[0].ts).toFixed(1);
-            const lastX = xFor(active[active.length - 1].ts).toFixed(1);
-            areaPath = `M ${firstX},${chartBottom} L ${lineParts.join(' L ')} L ${lastX},${chartBottom} Z`;
+            const firstSample = active[0];
+            const firstX = xFor(firstSample.ts);
+            const firstY = yFor(firstSample.val);
+            const lastPoint = lineParts[lineParts.length - 1].split(',');
+            const lastX = parseFloat(lastPoint[0]);
+            const lastY = parseFloat(lastPoint[1]);
+            const leftEdge = (firstX - LINE_HALF_WIDTH).toFixed(1);
+            const rightEdge = (lastX + LINE_HALF_WIDTH).toFixed(1);
+            // Path order:
+            //   1. Start at (left-extended, bottom).
+            //   2. Up the left wall to (left-extended, firstY) — vertical at the first value.
+            //   3. Across to (firstX, firstY) — short horizontal stub matching the line cap.
+            //   4. Through every polyline point.
+            //   5. Across to (right-extended, lastY) — same stub on the right.
+            //   6. Down the right wall to (right-extended, bottom).
+            //   7. Z closes the rectangle along the baseline.
+            areaPath =
+                `M ${leftEdge},${chartBottom} ` +
+                `L ${leftEdge},${firstY.toFixed(1)} ` +
+                `L ${firstX.toFixed(1)},${firstY.toFixed(1)} ` +
+                `L ${lineParts.join(' L ')} ` +
+                `L ${rightEdge},${lastY.toFixed(1)} ` +
+                `L ${rightEdge},${chartBottom} Z`;
         }
 
         // ---- Reference-line y positions (computed from dataMin/avg/dataMax) ----
@@ -470,12 +584,15 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                     "Apparent Wind Speed") were getting clipped at the viewBox right edge.
                     See `renderChartWithChrome()` for the HTML overlay. */}
 
-                {/* Area fill under the raw-sample polyline */}
+                {/* Area fill under the polyline — uses the same accent colour as the line but
+                    at low opacity so it reads as a "passive" / muted version of the active
+                    stroke. The fixed grey fill from before is kept as a fallback when the
+                    user hasn't picked a colour, so the chart still has a visible body. */}
                 {areaPath ? (
                     <path
                         d={areaPath}
-                        fill={COLORS.greyArea}
-                        fillOpacity={0.75}
+                        fill={lineColor}
+                        fillOpacity={0.22}
                     />
                 ) : null}
 
@@ -571,9 +688,16 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
         const hasCfgMax = cfgMax > cfgMin;
         const autoScale = this.props.settings.autoScale ?? DEFAULT_AUTO_SCALE;
         const samples = this.state.samples;
-        const endMs = samples.length > 0 ? samples[samples.length - 1].ts : Date.now();
+        // Mirror the SVG's right-edge convention so pill positions stay aligned with the chart.
+        const endMs = Date.now();
         const startMs = endMs - windowMs;
         const active = samples.filter(s => s.ts >= startMs);
+
+        // Get the last value and use it as actual one
+        if (samples.length && samples[samples.length - 1].ts < endMs) {
+            active.push({ val: samples[samples.length - 1].val, ts: endMs });
+        }
+
         let dataMin: number | null = null;
         let dataMax: number | null = null;
         let avg: number | null = null;
@@ -728,7 +852,7 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         }}
                     >
                         <Typography sx={{ fontSize: 14, color: COLORS.grey, opacity: 0.6, fontWeight: 500 }}>
-                            waiting for samples…
+                            {this.getText(WAITING_FOR_SAMPLES as ioBroker.StringOrTranslated)}
                         </Typography>
                     </Box>
                 ) : null}
@@ -766,7 +890,12 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         padding: isNeumorphicTheme(theme) ? '4px' : '6px',
                     })}
                 >
-                    {indicators}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     <Typography
                         variant="caption"
                         sx={{ fontWeight: 700, color: 'text.secondary' }}
@@ -814,7 +943,12 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         px: 2,
                     })}
                 >
-                    {indicators}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'text.secondary' }}>
                         {this.props.settings.label ?? DEFAULT_LABEL}
                     </Typography>
@@ -861,7 +995,12 @@ export class NmeaHistoryChartComponent extends WidgetGeneric<HistoryChartState, 
                         padding: isNeumorphicTheme(theme) ? '4px' : '6px',
                     })}
                 >
-                    {indicators}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     <Box
                         sx={{
                             width: '100%',

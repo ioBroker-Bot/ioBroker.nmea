@@ -53,6 +53,10 @@ interface AutopilotComponentState extends WidgetGenericState {
     lockedHeading: number | null; // autoPilot.heading (deg)
     awa: number | null; // apparent wind angle (deg, ±)
     rudder: number | null; // rudder position (deg, ±, port negative)
+    /** Speed Through Water — knots, from `speed.speedWaterReferenced` (PGN 128259). */
+    stw: number | null;
+    /** Speed Over Ground — knots, from `cogSogRapidUpdate.sog` (PGN 129026). */
+    sog: number | null;
     dialogOpen: boolean;
 }
 
@@ -91,12 +95,14 @@ const COLORS = {
     yellowDark: '#B38600',
 } as const;
 
-// Half-circle dial geometry — 1000×500 (or 1000×580 when the rudder bar is shown).
-// Pivot is parked at the bottom edge of the SVG so only the upper half of the compass
-// rose is visible — same layout as the KIP "svg-autopilot" reference.
+// Half-circle dial geometry — base dial fills 1000×500. We then stack two optional bands
+// underneath for the rudder bar (+80 px) and the STW/SOG readouts (+140 px). Total viewBox
+// height grows by whichever bands are enabled. CY (the dial pivot) stays at 500 regardless,
+// so the half-circle and SVG transforms are independent of these add-ons.
 const VIEWBOX_W = 1000;
-const VIEWBOX_H_BASE = 500; // dial only — viewBox bottom is the dial diameter
-const VIEWBOX_H_RUDDER = 580; // 80 px gutter under the dial for the rudder bar
+const VIEWBOX_H_DIAL = 500; // dial-only — viewBox bottom is the dial diameter
+const RUDDER_BAND_H = 80; // gutter under the dial for the rudder bar
+const SPEED_BAND_H = 140; // gutter for the STW + SOG readout block
 const CX = 500;
 const CY = 500; // pivot at the bottom edge of the dial-only viewBox
 const R_OUTER = 480; // outer ring radius — top of arc at y = CY - R_OUTER = 20
@@ -107,9 +113,15 @@ const POINTER_TIP_Y = CY - R_OUTER + 85; // top triangle tip just inside the out
 // so its left/right edges align with the leftmost / rightmost points of the outer ring.
 const RUDDER_W = R_OUTER * 2;
 const RUDDER_X = CX - R_OUTER;
-const RUDDER_Y = VIEWBOX_H_BASE + 30; // sits below the dial in the rudder-enabled viewBox
+const RUDDER_Y = VIEWBOX_H_DIAL + 30; // sits below the dial in the rudder-enabled viewBox
 const RUDDER_H = 32;
 const RUDDER_MAX_DEG = 35;
+// Colour scheme matches the Wind widget's STW/SOG bottom blocks: STW blue (water-frame motion,
+// same hue as a SET arrow would use) and SOG pink (ground-frame motion, same hue as a COG bug).
+const STW_COLOR = '#3298ff';
+const SOG_COLOR = '#FC0FC0';
+// canboat reports speed values in metres per second; Wind/AIS widgets display knots.
+const MS_TO_KN = 1.9438444924574;
 
 function pad3(n: number | null): string {
     if (n == null || !isFinite(n)) {
@@ -138,6 +150,8 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
             lockedHeading: null,
             awa: null,
             rudder: null,
+            stw: null,
+            sog: null,
             dialogOpen: false,
         };
     }
@@ -207,6 +221,10 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
         bind(`${instance}.vesselHeading.headingTrue`, v => this.setState({ heading: v } as AutopilotComponentState));
         bind(`${instance}.windData.windAngleApparent`, v => this.setState({ awa: v } as AutopilotComponentState));
         bind(`${instance}.rudder.position`, v => this.setState({ rudder: v } as AutopilotComponentState));
+        // STW (Speed Through Water — log/paddlewheel) and SOG (Speed Over Ground — GPS)
+        // shown as auxiliary readouts beneath the dial (same style as the Wind compass widget).
+        bind(`${instance}.speed.speedWaterReferenced`, v => this.setState({ stw: v } as AutopilotComponentState));
+        bind(`${instance}.cogSogRapidUpdate.sog`, v => this.setState({ sog: v } as AutopilotComponentState));
     }
 
     private unsubscribeAll(): void {
@@ -263,7 +281,7 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
      * `compact=true` drops the corner HDG/AWA blocks (used by the small tile).
      */
     protected renderDialSvg(size: number | string, compact = false, dark = true): React.JSX.Element {
-        const { heading, lockedHeading, awa, mode, rudder } = this.state;
+        const { heading, lockedHeading, awa, mode, rudder, stw, sog } = this.state;
         const headingDeg = heading ?? 0;
         const fg = dark ? COLORS.contrast : COLORS.contrastLight;
         const bgRing = dark ? '#1B2733' : '#E8EEF3';
@@ -271,7 +289,15 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
 
         const showRudder = !compact && this.props.settings.showRudder !== false;
         const showAwa = !compact && this.props.settings.showAwa !== false;
-        const viewH = showRudder ? VIEWBOX_H_RUDDER : VIEWBOX_H_BASE;
+        // Speeds (STW/SOG) are shown only on non-compact tiles where there's vertical room for
+        // a third band underneath the dial (and the rudder bar if present). Compact tiles drop
+        // them to keep the dial readable.
+        const showSpeeds = !compact;
+        // Build the viewBox height by stacking enabled bands underneath the dial diameter.
+        const viewH =
+            VIEWBOX_H_DIAL + (showRudder ? RUDDER_BAND_H : 0) + (showSpeeds ? SPEED_BAND_H : 0);
+        // Y origin where the speed band starts (just below dial or rudder).
+        const speedY = VIEWBOX_H_DIAL + (showRudder ? RUDDER_BAND_H : 0);
 
         const triangleD = `M ${CX} ${POINTER_TIP_Y - 14}
             L ${CX - 26} ${POINTER_TIP_Y + 26}
@@ -610,6 +636,86 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
                         ) : null}
                     </g>
                 ) : null}
+
+                {/* STW / SOG bottom band — same layout as the Wind compass widget: STW on the
+                    left in blue (water-frame motion), SOG on the right in pink (ground-frame
+                    motion). Each block stacks header / value / unit. The values come from
+                    `speed.speedWaterReferenced` and `cogSogRapidUpdate.sog` (both in m/s) and
+                    are converted to knots for display. The band is rendered only when speeds
+                    are enabled (i.e. non-compact); compact tiles drop it to keep the dial big. */}
+                {showSpeeds ? (
+                    <>
+                        {/* STW block — bottom-left. */}
+                        <text
+                            x={170}
+                            y={speedY + 38}
+                            textAnchor="middle"
+                            fontSize={36}
+                            fontWeight={700}
+                            fontFamily="Roboto, Arial, sans-serif"
+                            fill={STW_COLOR}
+                        >
+                            STW
+                        </text>
+                        <text
+                            x={170}
+                            y={speedY + 100}
+                            textAnchor="middle"
+                            fontSize={64}
+                            fontWeight={800}
+                            fontFamily="Roboto, Arial, sans-serif"
+                            fill={STW_COLOR}
+                        >
+                            {stw != null && isFinite(stw) ? (stw * MS_TO_KN).toFixed(1) : '—'}
+                        </text>
+                        <text
+                            x={170}
+                            y={speedY + 132}
+                            textAnchor="middle"
+                            fontSize={28}
+                            fontWeight={500}
+                            fontFamily="Roboto, Arial, sans-serif"
+                            fill={STW_COLOR}
+                        >
+                            kn
+                        </text>
+
+                        {/* SOG block — bottom-right. */}
+                        <text
+                            x={VIEWBOX_W - 170}
+                            y={speedY + 38}
+                            textAnchor="middle"
+                            fontSize={36}
+                            fontWeight={700}
+                            fontFamily="Roboto, Arial, sans-serif"
+                            fill={SOG_COLOR}
+                        >
+                            SOG
+                        </text>
+                        <text
+                            x={VIEWBOX_W - 170}
+                            y={speedY + 100}
+                            textAnchor="middle"
+                            fontSize={64}
+                            fontWeight={800}
+                            fontFamily="Roboto, Arial, sans-serif"
+                            fill={SOG_COLOR}
+                        >
+                            {sog != null && isFinite(sog) ? (sog * MS_TO_KN).toFixed(1) : '—'}
+                        </text>
+                        <text
+                            x={VIEWBOX_W - 170}
+                            y={speedY + 132}
+                            textAnchor="middle"
+                            fontSize={28}
+                            fontWeight={500}
+                            fontFamily="Roboto, Arial, sans-serif"
+                            fill={SOG_COLOR}
+                        >
+                            kn
+                        </text>
+                    </>
+                ) : null}
             </svg>
         );
     }
@@ -726,7 +832,12 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
                         padding: isNeumorphicTheme(theme) ? '4px' : '6px',
                     })}
                 >
-                    {indicators}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     {/* Half-circle dial is 2:1 (or 1.72:1 with rudder); compact tile shows the
                         compact-only variant which is rudder-less so 2:1 fits cleanly. */}
                     <Box sx={{ width: '100%', aspectRatio: '2' }}>{this.renderDialSvg('100%', true)}</Box>
@@ -775,7 +886,12 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
                         px: 2,
                     })}
                 >
-                    {indicators}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
                     <Box sx={{ textAlign: 'center' }}>
                         <Typography sx={{ fontSize: 12, color: 'text.secondary', fontWeight: 700 }}>HDG</Typography>
                         <Typography sx={{ fontSize: 22, fontWeight: 800, lineHeight: 1 }}>
@@ -825,15 +941,25 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
                         padding: isNeumorphicTheme(theme) ? '8px' : '12px',
                     })}
                 >
-                    {indicators}
-                    {/* Match the SVG aspect (2:1 without rudder, 1.72:1 with rudder).
-                        Pick the rudder aspect when the user has rudder enabled. */}
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{ display: 'contents' }}
+                    >
+                        {indicators}
+                    </div>
+                    {/* Aspect must match the SVG height computed at render time:
+                          dial (500) + rudder band (80) + speed band (140) = up to 720.
+                        We compute the same expression here so the Box reserves a matching
+                        rectangle and the SVG fills it without letterboxing. */}
                     <Box
                         sx={{
-                            aspectRatio:
-                                this.props.settings.showRudder !== false ? `${VIEWBOX_W} / ${VIEWBOX_H_RUDDER}` : '2',
+                            aspectRatio: (() => {
+                                const showRudder = this.props.settings.showRudder !== false;
+                                const h = VIEWBOX_H_DIAL + (showRudder ? RUDDER_BAND_H : 0) + SPEED_BAND_H;
+                                return `${VIEWBOX_W} / ${h}`;
+                            })(),
                             height: '100%',
-                            maxHeight: 320,
+                            maxHeight: 360,
                         }}
                     >
                         {this.renderDialSvg('100%')}
