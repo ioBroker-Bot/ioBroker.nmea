@@ -98,6 +98,7 @@ The development of Simrad/navico/B&G is not completed yet.
 -->
 ## Changelog
 ### **WORK IN PROGRESS**
+- (copilot) Adapter requires node.js >= 22 now
 * (bluefox) Implemented Raymarine autopilot support
 
 ### 0.4.2 (2026-01-05)
