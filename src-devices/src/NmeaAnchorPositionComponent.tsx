@@ -52,12 +52,21 @@ const AnchorIcon: React.ComponentType<any> = MuiIcons?.Anchor;
 const SailingIcon: React.ComponentType<any> = MuiIcons?.Sailing;
 
 interface AnchorPositionSettings extends CustomWidgetPlugin {
-    /** e.g. 'nmea.0' */
+    /** e.g. 'nmea.0' — used for live depth subscription. */
     instance?: string;
-    /** Anchor latitude in decimal degrees. */
-    anchorLat?: number;
-    /** Anchor longitude in decimal degrees. */
-    anchorLon?: number;
+    /**
+     * State ID of a combined "lat;lon" string holding the anchor position. Mutually exclusive
+     * with the separate `anchorLat` / `anchorLon` state IDs.
+     */
+    anchorPosition?: string;
+    /** State ID returning the anchor latitude as a number (decimal degrees). */
+    anchorLat?: string;
+    /** State ID returning the anchor longitude as a number (decimal degrees). */
+    anchorLon?: string;
+    /** State ID returning the current boat latitude as a number (decimal degrees). */
+    positionLat?: string;
+    /** State ID returning the current boat longitude as a number (decimal degrees). */
+    positionLon?: string;
     /** Length of deployed chain/rope in metres. Drives the swing-circle radius. */
     chainLength?: number;
     /**
@@ -70,10 +79,22 @@ interface AnchorPositionSettings extends CustomWidgetPlugin {
 }
 
 interface AnchorPositionState extends WidgetGenericState {
+    /** Resolved anchor latitude — populated from `anchorPosition` ("lat;lon") or `anchorLat`. */
+    anchorLat: number | null;
+    /** Resolved anchor longitude. */
+    anchorLon: number | null;
+    /** Resolved boat latitude — from the `positionLat` state subscription. */
     boatLat: number | null;
+    /** Resolved boat longitude — from the `positionLon` state subscription. */
     boatLon: number | null;
     /** Live water depth from `waterDepth.depth` (PGN 128267). */
     currentDepth: number | null;
+    /**
+     * Sliding-window position history (last `TRAIL_WINDOW_MS`). Older entries are dropped on every
+     * append. Loaded from the configured history adapter on mount and extended live as positionLat
+     * / positionLon updates arrive. Rendered as a red heatmap-style trail on the map.
+     */
+    trail: { lat: number; lon: number; ts: number }[];
     dialogOpen: boolean;
 }
 
@@ -81,6 +102,9 @@ interface AnchorPositionState extends WidgetGenericState {
 // realistic latitude for distances under a few hundred metres (an anchor swing).
 const EARTH_RADIUS_M = 6_371_000;
 const RAD = Math.PI / 180;
+
+/** Trail window for the position heatmap — the last 2 hours of boat positions. */
+const TRAIL_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 const COLORS = {
     bg: '#0E1620',
@@ -91,7 +115,30 @@ const COLORS = {
     boat: '#3a8dff', // blue — matches own-ship colour in the AIS radar
     chain: '#ffeb3b', // yellow — visually links anchor to boat (swing line)
     swingRing: '#ffeb3b', // yellow ring at chain-length radius
+    trail: '#ff1744', // bright red — position-history heatmap dots
 } as const;
+
+/**
+ * Parse a combined "lat;lon" or "lat,lon" string state value. Accepts either separator and
+ * tolerates surrounding whitespace, so a user can plug in different upstream conventions. Returns
+ * null whenever the input isn't a string with two finite numbers — callers treat that as "no
+ * anchor position known".
+ */
+function parseLatLonString(val: unknown): { lat: number; lon: number } | null {
+    if (typeof val !== 'string') {
+        return null;
+    }
+    const parts = val.split(/[;,]/).map(s => s.trim());
+    if (parts.length !== 2) {
+        return null;
+    }
+    const lat = parseFloat(parts[0]);
+    const lon = parseFloat(parts[1]);
+    if (!isFinite(lat) || !isFinite(lon)) {
+        return null;
+    }
+    return { lat, lon };
+}
 
 /** Great-circle distance via haversine, returning metres. */
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -179,18 +226,26 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             boat: L.Marker;
             rode: L.Polyline;
             swing: L.Circle | null;
+            /** Heatmap-style red dots for the recent position history. */
+            trail: L.LayerGroup;
             tile: L.TileLayer;
         }
     >();
     private currentTileStyle = new Map<string, 'osm' | 'satellite'>();
 
+    /** Outstanding "fetch position history" job — token used to ignore stale completions. */
+    private trailLoadToken = 0;
+
     constructor(props: WidgetGenericProps<AnchorPositionSettings>) {
         super(props);
         this.state = {
             ...this.state,
+            anchorLat: null,
+            anchorLon: null,
             boatLat: null,
             boatLon: null,
             currentDepth: null,
+            trail: [],
             dialogOpen: false,
         };
     }
@@ -259,20 +314,39 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         prevState: Readonly<AnchorPositionState>,
     ): void {
         super.componentDidUpdate?.(prevProps, this.state);
-        if (prevProps.settings.instance !== this.props.settings.instance) {
+        const p = prevProps.settings;
+        const s = this.props.settings;
+        // Re-subscribe whenever any of the configured state IDs (or the adapter instance) changed.
+        if (
+            p.instance !== s.instance ||
+            p.anchorPosition !== s.anchorPosition ||
+            p.anchorLat !== s.anchorLat ||
+            p.anchorLon !== s.anchorLon ||
+            p.positionLat !== s.positionLat ||
+            p.positionLon !== s.positionLon
+        ) {
             this.unsubscribeAll();
+            // Drop any stale resolved values; they'll be refilled by the new bindings.
+            this.setState({
+                anchorLat: null,
+                anchorLon: null,
+                boatLat: null,
+                boatLon: null,
+                trail: [],
+            } as AnchorPositionState);
             this.subscribeAll();
         }
         // Anything that affects the overlays gets re-applied to all attached maps. We only
         // touch overlays that have actually changed so Leaflet doesn't reload tiles.
         if (
-            prevProps.settings.anchorLat !== this.props.settings.anchorLat ||
-            prevProps.settings.anchorLon !== this.props.settings.anchorLon ||
-            prevProps.settings.chainLength !== this.props.settings.chainLength ||
-            prevProps.settings.depthAtDrop !== this.props.settings.depthAtDrop ||
-            prevProps.settings.mapStyle !== this.props.settings.mapStyle ||
+            p.chainLength !== s.chainLength ||
+            p.depthAtDrop !== s.depthAtDrop ||
+            p.mapStyle !== s.mapStyle ||
+            prevState.anchorLat !== this.state.anchorLat ||
+            prevState.anchorLon !== this.state.anchorLon ||
             prevState.boatLat !== this.state.boatLat ||
-            prevState.boatLon !== this.state.boatLon
+            prevState.boatLon !== this.state.boatLon ||
+            prevState.trail !== this.state.trail
         ) {
             this.updateAllOverlays();
         }
@@ -294,16 +368,52 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
     private subscribeAll(): void {
         const instance = this.props.settings.instance || 'nmea.0';
         const ctx = this.props.stateContext;
-        const bind = (id: string, update: (v: number | null) => void): void => {
-            const handler = (_id: string, state: ioBroker.State | null | undefined): void => {
-                update(state?.val != null ? Number(state.val) : null);
-            };
+        const s = this.props.settings;
+
+        const subscribe = (
+            id: string,
+            handler: (id: string, state: ioBroker.State | null | undefined) => void,
+        ): void => {
             ctx.getState(id, handler);
             this.stateHandlers.set(id, handler);
         };
-        bind(`${instance}.gnssPositionData.latitude`, v => this.setState({ boatLat: v } as AnchorPositionState));
-        bind(`${instance}.gnssPositionData.longitude`, v => this.setState({ boatLon: v } as AnchorPositionState));
-        bind(`${instance}.waterDepth.depth`, v => this.setState({ currentDepth: v } as AnchorPositionState));
+        const bindNum = (id: string, update: (v: number | null) => void): void => {
+            subscribe(id, (_id, state) => update(state?.val != null ? Number(state.val) : null));
+        };
+
+        // Anchor position: prefer the combined "lat;lon" string state (`anchorPosition`); if it
+        // is not configured, fall back to the separate `anchorLat` / `anchorLon` numeric states.
+        if (s.anchorPosition) {
+            subscribe(s.anchorPosition, (_id, state) => {
+                const parsed = parseLatLonString(state?.val);
+                this.setState({
+                    anchorLat: parsed?.lat ?? null,
+                    anchorLon: parsed?.lon ?? null,
+                } as AnchorPositionState);
+            });
+        } else {
+            if (s.anchorLat) {
+                bindNum(s.anchorLat, v => this.setState({ anchorLat: v } as AnchorPositionState));
+            }
+            if (s.anchorLon) {
+                bindNum(s.anchorLon, v => this.setState({ anchorLon: v } as AnchorPositionState));
+            }
+        }
+
+        // Boat position — drives both the live marker and the trail.
+        if (s.positionLat) {
+            subscribe(s.positionLat, (_id, state) => this.onBoatPositionUpdate('lat', state));
+        }
+        if (s.positionLon) {
+            subscribe(s.positionLon, (_id, state) => this.onBoatPositionUpdate('lon', state));
+        }
+
+        // Live water depth — used in the readout overlay only; the adapter path is fixed.
+        bindNum(`${instance}.waterDepth.depth`, v => this.setState({ currentDepth: v } as AnchorPositionState));
+
+        // Kick off a one-shot history fetch for the trail. Live updates from the subscriptions
+        // above will continue to append to whatever this returns.
+        void this.loadTrailHistory();
     }
 
     private unsubscribeAll(): void {
@@ -312,6 +422,103 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             ctx.removeState(id, handler);
         }
         this.stateHandlers.clear();
+        // Invalidate any in-flight history load — its result would belong to the previous
+        // subscription set and could re-introduce stale points.
+        this.trailLoadToken += 1;
+    }
+
+    /**
+     * Handle a live position update from either the lat or lon state subscription. Updates the
+     * matching field in component state and appends a new entry to the trail when both lat & lon
+     * are known (i.e. we have a complete fix). Old trail entries past the window are dropped.
+     */
+    private onBoatPositionUpdate(which: 'lat' | 'lon', state: ioBroker.State | null | undefined): void {
+        const v = state?.val != null ? Number(state.val) : null;
+        const ts = typeof state?.ts === 'number' ? state.ts : Date.now();
+        this.setState(prev => {
+            const newLat = which === 'lat' ? v : prev.boatLat;
+            const newLon = which === 'lon' ? v : prev.boatLon;
+            const next: Partial<AnchorPositionState> = which === 'lat' ? { boatLat: v } : { boatLon: v };
+            // Only extend the trail when we have a complete, finite fix and it actually moved
+            // (avoids duplicate points from lat & lon updating in sequence at the same coords).
+            if (newLat != null && newLon != null && isFinite(newLat) && isFinite(newLon)) {
+                const cutoff = Date.now() - TRAIL_WINDOW_MS;
+                const filtered = prev.trail.filter(p => p.ts >= cutoff);
+                const last = filtered[filtered.length - 1];
+                if (!last || last.lat !== newLat || last.lon !== newLon) {
+                    (next as AnchorPositionState).trail = [...filtered, { lat: newLat, lon: newLon, ts }];
+                } else if (filtered.length !== prev.trail.length) {
+                    (next as AnchorPositionState).trail = filtered;
+                }
+            }
+            return next;
+        });
+    }
+
+    /**
+     * One-shot history backfill for the position trail. Reads the configured history adapter for
+     * both positionLat / positionLon over the last `TRAIL_WINDOW_MS`, merges the two streams by
+     * matching timestamps to the same second, and seeds `state.trail`. Silently no-ops if no
+     * history adapter is configured for the chosen states.
+     */
+    private async loadTrailHistory(): Promise<void> {
+        const s = this.props.settings;
+        if (!s.positionLat || !s.positionLon) {
+            return;
+        }
+        const ctx = this.props.stateContext;
+        const historyAdapter = ctx.defaultHistory;
+        if (!historyAdapter) {
+            return;
+        }
+        const token = ++this.trailLoadToken;
+        const end = Date.now();
+        const start = end - TRAIL_WINDOW_MS;
+        try {
+            const socket = ctx.getSocket();
+            const [latRows, lonRows] = await Promise.all([
+                socket.getHistory(s.positionLat, { instance: historyAdapter, start, end, aggregate: 'none' }),
+                socket.getHistory(s.positionLon, { instance: historyAdapter, start, end, aggregate: 'none' }),
+            ]);
+            // Subscription may have been torn down / replaced while we awaited — drop the result.
+            if (token !== this.trailLoadToken) {
+                return;
+            }
+            if (!Array.isArray(latRows) || !Array.isArray(lonRows)) {
+                return;
+            }
+            // Index lat rows by floor-second so a tiny clock skew between the two history streams
+            // doesn't prevent us from pairing the corresponding samples (NMEA GPS PGNs typically
+            // emit lat & lon in the same telegram, so their write timestamps are within a few ms).
+            const latByTs = new Map<number, number>();
+            for (const r of latRows as Array<{ val: unknown; ts?: number }>) {
+                const v = Number(r.val);
+                if (isFinite(v) && r.ts) {
+                    latByTs.set(Math.floor(r.ts / 1000), v);
+                }
+            }
+            const trail: { lat: number; lon: number; ts: number }[] = [];
+            for (const r of lonRows as Array<{ val: unknown; ts?: number }>) {
+                const lon = Number(r.val);
+                if (!isFinite(lon) || !r.ts) {
+                    continue;
+                }
+                const lat = latByTs.get(Math.floor(r.ts / 1000));
+                if (lat == null) {
+                    continue;
+                }
+                trail.push({ lat, lon, ts: r.ts });
+            }
+            trail.sort((a, b) => a.ts - b.ts);
+            // Merge with any live points that arrived while we were loading. De-duplicate by ts.
+            this.setState(prev => {
+                const seen = new Set(trail.map(p => p.ts));
+                const merged = [...trail, ...prev.trail.filter(p => !seen.has(p.ts))].sort((a, b) => a.ts - b.ts);
+                return { trail: merged };
+            });
+        } catch {
+            // History adapter unreachable / not configured for these states — proceed live-only.
+        }
     }
 
     private getMapRef(key: string): (el: HTMLDivElement | null) => void {
@@ -359,16 +566,19 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         const tile = this.buildTileLayer(this.props.settings.mapStyle ?? 'osm');
         tile.addTo(map);
 
-        const anchorIcon = buildAnchorIcon();
-        const boatIcon = buildBoatIcon();
-        const anchorMarker = L.marker([0, 0], { icon: anchorIcon, opacity: 0 }).addTo(map);
-        const boatMarker = L.marker([0, 0], { icon: boatIcon, opacity: 0 }).addTo(map);
+        // Layer order is "first added → bottom of stack". Add trail first so the heatmap dots sit
+        // *below* the rode line and the anchor/boat icons — those need to stay visible on top.
+        const trail = L.layerGroup().addTo(map);
         const rode = L.polyline([], {
             color: COLORS.chain,
             weight: 2,
             opacity: 0.85,
             dashArray: '6 6',
         }).addTo(map);
+        const anchorIcon = buildAnchorIcon();
+        const boatIcon = buildBoatIcon();
+        const anchorMarker = L.marker([0, 0], { icon: anchorIcon, opacity: 0 }).addTo(map);
+        const boatMarker = L.marker([0, 0], { icon: boatIcon, opacity: 0 }).addTo(map);
         // Swing circle is created lazily once we know we have a chain length — it's rendered
         // on top of the rode line so the boundary is visible even when the boat sits near it.
 
@@ -378,6 +588,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             boat: boatMarker,
             rode,
             swing: null,
+            trail,
             tile,
         });
         this.currentTileStyle.set(key, this.props.settings.mapStyle ?? 'osm');
@@ -426,8 +637,8 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         if (!map || !overlays) {
             return;
         }
-        const { anchorLat, anchorLon, chainLength, depthAtDrop, mapStyle } = this.props.settings;
-        const { boatLat, boatLon } = this.state;
+        const { chainLength, depthAtDrop, mapStyle } = this.props.settings;
+        const { anchorLat, anchorLon, boatLat, boatLon, trail } = this.state;
         const haveAnchor = anchorLat != null && anchorLon != null && isFinite(anchorLat) && isFinite(anchorLon);
         const haveBoat = boatLat != null && boatLon != null && isFinite(boatLat) && isFinite(boatLon);
 
@@ -469,6 +680,32 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             overlays.rode.setStyle({ opacity: 0.85 });
         } else {
             overlays.rode.setLatLngs([]);
+        }
+
+        // Position-history heatmap — one small red circle per recent fix. Opacity scales linearly
+        // with age (newest = full, oldest = ~25 %), so the visited zone "fades in" toward the
+        // current boat position. We rebuild the layer-group contents on each call; for a 2-hour
+        // window the count tops out in the low hundreds even at a per-second update rate, which
+        // Leaflet handles comfortably.
+        overlays.trail.clearLayers();
+        if (trail.length > 0) {
+            const now = Date.now();
+            const windowMs = TRAIL_WINDOW_MS;
+            for (const pt of trail) {
+                const age = Math.max(0, Math.min(windowMs, now - pt.ts));
+                const fresh = 1 - age / windowMs; // 0 (oldest) … 1 (newest)
+                const fillOpacity = 0.25 + 0.55 * fresh;
+                overlays.trail.addLayer(
+                    L.circleMarker([pt.lat, pt.lon], {
+                        radius: 5,
+                        color: COLORS.trail,
+                        weight: 0,
+                        fillColor: COLORS.trail,
+                        fillOpacity,
+                        interactive: false,
+                    }),
+                );
+            }
         }
 
         // Swing circle — drawn around the anchor at the effective swing radius (chain length
@@ -517,20 +754,35 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         }
     }
 
-    /** Set the anchor position to the boat's current GPS fix. */
+    /**
+     * Write the boat's current GPS fix back into whichever anchor state(s) the user configured.
+     * If `anchorPosition` is set, we write a "lat;lon" string; otherwise the separate `anchorLat`
+     * / `anchorLon` numeric states are written. The new value will also flow back through the
+     * subscription handler to update `state.anchorLat` / `anchorLon`, but we set them locally
+     * here so the map can refit immediately rather than waiting for the round-trip.
+     */
     private setAnchorToCurrent(): void {
         const { boatLat, boatLon } = this.state;
         if (boatLat == null || boatLon == null) {
             return;
         }
-        // Persist the change through the host's settings system if it exposes a write API; the
-        // dm-widgets bridge doesn't expose that uniformly, so we just update the local widget
-        // state via the host's standard onOpenSettings flow. As a fallback we mutate the
-        // settings object so the current session sees the new anchor.
-        const settingsAny = this.props.settings;
-        settingsAny.anchorLat = boatLat;
-        settingsAny.anchorLon = boatLon;
-        this.forceUpdate();
+        const s = this.props.settings;
+        const socket = this.props.stateContext.getSocket();
+        try {
+            if (s.anchorPosition) {
+                void socket.setState(s.anchorPosition, `${boatLat};${boatLon}`);
+            } else {
+                if (s.anchorLat) {
+                    void socket.setState(s.anchorLat, boatLat);
+                }
+                if (s.anchorLon) {
+                    void socket.setState(s.anchorLon, boatLon);
+                }
+            }
+        } catch (e) {
+            console.warn('[NmeaAnchorPosition] setAnchorToCurrent failed', e);
+        }
+        this.setState({ anchorLat: boatLat, anchorLon: boatLon } as AnchorPositionState);
         // Force-refit so the dialog zooms to the freshly set anchor.
         for (const key of this.maps.keys()) {
             this.updateOverlays(key, true);
@@ -538,8 +790,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
     }
 
     private currentDistanceM(): number | null {
-        const { anchorLat, anchorLon } = this.props.settings;
-        const { boatLat, boatLon } = this.state;
+        const { anchorLat, anchorLon, boatLat, boatLon } = this.state;
         if (
             anchorLat == null ||
             anchorLon == null ||

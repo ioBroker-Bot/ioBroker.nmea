@@ -137,8 +137,8 @@ const RUDDER_MAX_DEG = 35;
 // same hue as a SET arrow would use) and SOG pink (ground-frame motion, same hue as a COG bug).
 const STW_COLOR = '#3298ff';
 const SOG_COLOR = '#FC0FC0';
-// canboat reports speed values in metres per second; Wind/AIS widgets display knots.
-const MS_TO_KN = 1.9438444924574;
+// The nmea adapter already converts speed states (sog, speedWaterReferenced, …) from m/s
+// to knots in main.ts before writing them, so no unit conversion happens in this widget.
 
 function pad3(n: number | null): string {
     if (n == null || !isFinite(n)) {
@@ -884,7 +884,10 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
                 </text>
 
                 {/* Big setpoint number — central inside the half-disc.
-                    Idle: shows the locked heading (Auto) / current value mirrored from the bus.
+                    Idle: shows the locked heading when the autopilot is engaged (Auto/Wind/Track/
+                    NoDrift), or the current compass heading when the autopilot is off / not
+                    connected (mode null or Standby) — in those modes there is no live setpoint
+                    and the locked-heading register would be stale or zero.
                     Dragging: the new target dominates in orange and the unchanged "current"
                     setpoint sits beneath it in dimmed text so the operator can see both at a
                     glance and judge how much they're shifting it before committing. */}
@@ -927,7 +930,11 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
                         fontWeight={700}
                         textAnchor="middle"
                     >
-                        {lockedHeading == null ? '---' : pad3(lockedHeading)}
+                        {(() => {
+                            const autopilotActive = mode != null && mode !== 0;
+                            const centerValue = autopilotActive ? lockedHeading : heading;
+                            return centerValue == null ? '---' : pad3(centerValue);
+                        })()}
                         <tspan
                             fontSize={100}
                             fontWeight={400}
@@ -1002,8 +1009,7 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
             { delta: 1, label: '+1' },
             { delta: 10, label: '+10' },
         ];
-        const fmtKn = (v: number | null): string =>
-            v != null && isFinite(v) ? (v * MS_TO_KN).toFixed(1) : '—';
+        const fmtKn = (v: number | null): string => (v != null && isFinite(v) ? v.toFixed(1) : '—');
         return (
             <Box
                 sx={{
