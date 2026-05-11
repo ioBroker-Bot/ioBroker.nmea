@@ -193,6 +193,15 @@
                         "de": "AIS Radar"
                     },
                     "icon": "aisRadar.png"
+                },
+                {
+                    "name": "NmeaAnchorPositionComponent",
+                    "label": "NMEA Anchor Position",
+                    "description": {
+                        "en": "AIS Anchor Position",
+                        "de": "AIS Anker Position"
+                    },
+                    "icon": "aisAnchor.png"
                 }
             ]
         },

@@ -4,6 +4,7 @@ import type { PGN } from '@canboat/ts-pgns';
 
 import { type NmeaConfig, type PGNMessage } from '../types';
 import { GenericDriver } from './genericDriver';
+import { isActisenseAutopilotLine } from './autoPilotSniffer';
 
 export default class NGT1 extends GenericDriver {
     private readonly serialPort: string;
@@ -57,8 +58,16 @@ export default class NGT1 extends GenericDriver {
             objectMode: true,
 
             transform(chunk, encoding, callback) {
+                const line = chunk.toString();
+                // Pre-parser raw sniff for autopilot-related PGNs so the operator can see every
+                // wind-angle / mode / heading frame that hits the bus, even if canboatjs' parser
+                // drops it (fast-packet reassembly failure, unknown manufacturer-proprietary
+                // variant, etc.). Logged at info level — these PGNs are rare on a healthy bus.
+                if (isActisenseAutopilotLine(line)) {
+                    adapter.log.info(`[NGT1 RAW autoPilot] ${line.trim()}`);
+                }
                 try {
-                    const json = parser.parseString(chunk.toString());
+                    const json = parser.parseString(line);
                     if (json?.fields) {
                         onData?.(json);
                     } else {

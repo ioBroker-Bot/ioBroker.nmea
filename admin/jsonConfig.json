@@ -262,6 +262,91 @@
                 }
             }
         },
+        "autopilot": {
+            "type": "panel",
+            "label": "Autopilot",
+            "items": {
+                "announceSrc": {
+                    "label": "Source address (CAN)",
+                    "help": "CAN source address used for outbound autopilot commands. Pick a value not used by any other device on the bus (typical free range: 7-23).",
+                    "type": "number",
+                    "min": 1,
+                    "max": 251,
+                    "default": 7,
+                    "sm": 12,
+                    "md": 6,
+                    "lg": 4
+                },
+                "announceDevice": {
+                    "newLine": true,
+                    "label": "Announce as NMEA-2000 device",
+                    "help": "Periodically broadcast Address Claim (PGN 60928), Product Information (PGN 126996), and a Raymarine-style Device Identification (PGN 126720). Required by some autopilots before they accept group-function commands like Pilot Wind Datum.",
+                    "type": "checkbox",
+                    "default": false,
+                    "sm": 12
+                },
+                "announceUniqueNumber": {
+                    "newLine": true,
+                    "label": "Unique number",
+                    "help": "21-bit unique ID used in the NAME field. Pick anything not colliding with other devices on the bus.",
+                    "type": "number",
+                    "min": 1,
+                    "max": 2097151,
+                    "default": 12345,
+                    "sm": 12,
+                    "md": 6,
+                    "lg": 4,
+                    "disabled": "!data.announceDevice"
+                },
+                "announceManufacturerCode": {
+                    "label": "Manufacturer code",
+                    "help": "11-bit. 2046 = reserved/unassigned (safe for private use).",
+                    "type": "number",
+                    "min": 0,
+                    "max": 2047,
+                    "default": 2046,
+                    "sm": 12,
+                    "md": 6,
+                    "lg": 4,
+                    "disabled": "!data.announceDevice"
+                },
+                "announceProductCode": {
+                    "newLine": true,
+                    "label": "Product code",
+                    "type": "number",
+                    "min": 0,
+                    "max": 65535,
+                    "default": 49153,
+                    "sm": 12,
+                    "md": 6,
+                    "lg": 4,
+                    "disabled": "!data.announceDevice"
+                },
+                "announceModelId": {
+                    "label": "Model name",
+                    "type": "text",
+                    "default": "ioBroker.nmea",
+                    "maxLength": 32,
+                    "sm": 12,
+                    "md": 6,
+                    "lg": 4,
+                    "disabled": "!data.announceDevice"
+                },
+                "announceRaymarineDeviceId": {
+                    "newLine": true,
+                    "label": "Raymarine device byte (PGN 126720)",
+                    "help": "0 = disable. 3 = S100 controller (recommended for Raymarine bus). 16 = course computer.",
+                    "type": "number",
+                    "min": 0,
+                    "max": 255,
+                    "default": 3,
+                    "sm": 12,
+                    "md": 6,
+                    "lg": 4,
+                    "disabled": "!data.announceDevice"
+                }
+            }
+        },
         "simulate": {
             "type": "panel",
             "label": "Simulate",

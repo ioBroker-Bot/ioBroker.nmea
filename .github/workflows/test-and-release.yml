@@ -107,7 +107,6 @@ jobs:
           retention-days: 3
 
   # Deploys the final package to NPM
-  # Deploys the final package to NPM
   deploy:
     needs: [ check-and-lint, adapter-tests ]
 

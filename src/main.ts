@@ -29,6 +29,7 @@ import YDWG from './lib/ydwg';
 import type { GenericDriver } from './lib/genericDriver';
 import { SignalKServer } from './lib/signalK';
 import { ENGINE_J1939_PGNS, processEngineJ1939 } from './lib/engineJ1939';
+import { AddressClaim } from './lib/addressClaim';
 
 const pgnPath = require.resolve('@canboat/ts-pgns').replace(/\\/g, '/').split('/');
 pgnPath.pop();
@@ -133,6 +134,8 @@ export class NmeaAdapter extends Adapter {
 
     private signalKServer: SignalKServer | null = null;
 
+    private addressClaim: AddressClaim | null = null;
+
     private windSpeeds: { tws: number; ts: number }[] | null = null;
 
     private windDirs: { twd: number; ts: number }[] | null = null;
@@ -148,6 +151,11 @@ export class NmeaAdapter extends Adapter {
     private pressureAlerts: Record<string, string> = {};
 
     private lang: ioBroker.Languages = 'en';
+
+    // Per-(pgn,src) fingerprint of the last logged autopilot status frame so the chatty
+    // status PGNs (65345/65359/65360/65379) only emit a log line when something actually
+    // changes. Command frames (126208/126720) bypass this and are always logged.
+    private autoPilotBusLastSeen: Map<string, string> = new Map();
 
     constructor(options: Partial<AdapterOptions> = {}) {
         super({
@@ -183,6 +191,13 @@ export class NmeaAdapter extends Adapter {
             signalKEnabled: false,
             signalKPort: 3000,
             signalKBidirectional: true,
+            announceDevice: false,
+            announceSrc: 7,
+            announceUniqueNumber: 12345,
+            announceManufacturerCode: 2046,
+            announceProductCode: 0xc001,
+            announceModelId: 'ioBroker.nmea',
+            announceRaymarineDeviceId: 0x03,
         };
     }
 
@@ -974,6 +989,40 @@ export class NmeaAdapter extends Adapter {
     onData = async (data: PGN): Promise<void> => {
         this.lastMessageReceived = Date.now();
 
+        // ── Autopilot bus snooping ───────────────────────────────────────────────────────
+        // Surface every autopilot-related frame seen on the bus at info-level so the operator
+        // can correlate physical Control-Panel (p70/p70s/p70R) button presses with what the
+        // adapter is actually decoding. Two categories:
+        //   • Command frames — 126208 (NMEA group function, used by Raymarine for mode/heading
+        //     commands) and 126720 (manufacturer proprietary fast packet, used for Seatalk1
+        //     keystroke encodings). These are infrequent and every occurrence is interesting.
+        //   • Status frames — 65345/65359/65360/65379 (Seatalk pilot wind datum / heading /
+        //     locked heading / mode). The autopilot broadcasts these continuously, so we
+        //     dedupe on (pgn, src) + JSON-fields fingerprint and only log on change.
+        // if (data.pgn) {
+        //     const isCmd = data.pgn === 126208 || data.pgn === 126720;
+        //     const isStatus = false;
+        //         // data.pgn === 65345 || data.pgn === 65359 || data.pgn === 65360 || data.pgn === 65379;
+        //     if (isCmd || isStatus) {
+        //         const raw = (data as any).rawData
+        //             ? Buffer.from((data as any).rawData).toString('hex').match(/.{2}/g)?.join(' ') ?? ''
+        //             : '';
+        //         const payload = JSON.stringify(data.fields ?? {});
+        //         const tag = isCmd ? 'CMD' : 'STATUS';
+        //         const line = `[autoPilot ← src=${(data as any).src ?? '?'} dst=${(data as any).dst ?? '?'}] PGN ${data.pgn} ${tag} raw=[${raw}] ${payload}`;
+        //         if (isCmd) {
+        //             this.log.info(line);
+        //         } else {
+        //             const fp = `${data.pgn}:${(data as any).src ?? '?'}`;
+        //             if (this.autoPilotBusLastSeen.get(fp) !== payload) {
+        //                 this.autoPilotBusLastSeen.set(fp, payload);
+        //                 this.log.info(line);
+        //             }
+        //         }
+        //     }
+        // }
+        // ────────────────────────────────────────────────────────────────────────────────
+
         if (!this.connectedInterval) {
             await this.setState('info.connection', true, true);
             this.connectedInterval = this.setInterval(async () => {
@@ -1083,7 +1132,52 @@ export class NmeaAdapter extends Adapter {
             return;
         }
 
+        // Analyse which autopilot it could be here
+        let autoPilotObj =
+            (await this.getObjectAsync('seatalkPilotMode')) || (await this.getObjectAsync('seatalk1PilotMode'));
+        if (autoPilotObj) {
+            this.autoPilot = new SeaTalkAutoPilot(
+                this,
+                this.config,
+                this.nmeaDriver,
+                this.values,
+                autoPilotObj.native.src,
+            );
+        }
+        if (!this.autoPilot) {
+            autoPilotObj = await this.getObjectAsync('simnetDeviceStatus');
+            if (autoPilotObj) {
+                this.autoPilot = new NavicoAutoPilot(
+                    this,
+                    this.config,
+                    this.nmeaDriver,
+                    this.values,
+                    autoPilotObj.native.src,
+                );
+            }
+        }
         this.nmeaDriver?.start();
+
+        // Optional NMEA-2000 device announcement. Some autopilots silently drop group-function
+        // commands from unknown source addresses; broadcasting an Address Claim + Product Info
+        // (and optionally a Raymarine-style Device Identification) gets us into the device list
+        // and unblocks those commands. Off by default — enable via `announceDevice` in config.
+        if (this.config.announceDevice && this.nmeaDriver) {
+            const cfgSrc = parseInt(this.config.announceSrc as unknown as string, 10);
+            this.addressClaim = new AddressClaim(this, this.nmeaDriver, {
+                src: isFinite(cfgSrc) && cfgSrc > 0 && cfgSrc < 252 ? cfgSrc : 7,
+                uniqueNumber:
+                    parseInt(this.config.announceUniqueNumber as unknown as string, 10) || 12345,
+                manufacturerCode:
+                    parseInt(this.config.announceManufacturerCode as unknown as string, 10) || 2046,
+                productCode:
+                    parseInt(this.config.announceProductCode as unknown as string, 10) || 0xc001,
+                modelId: this.config.announceModelId || 'ioBroker.nmea',
+                raymarineDeviceId:
+                    parseInt(this.config.announceRaymarineDeviceId as unknown as string, 10) || 0,
+            });
+            this.addressClaim.start();
+        }
 
         if (this.config.signalKEnabled) {
             const port = parseInt(this.config.signalKPort as unknown as string, 10) || 3000;
@@ -1144,10 +1238,12 @@ export class NmeaAdapter extends Adapter {
             this.pgn2entry[pgn] = obj;
 
             // if seatalk1PilotMode
-            if (pgn === 126720 && this.nmeaDriver && srcAddress) {
-                this.autoPilot = new SeaTalkAutoPilot(this, this.config, this.nmeaDriver, this.values, srcAddress);
-            } else if (pgn === 130860 && this.nmeaDriver && srcAddress) {
-                this.autoPilot = new NavicoAutoPilot(this, this.config, this.nmeaDriver, this.values, srcAddress);
+            if (!this.autoPilot) {
+                if (pgn === 126720 && this.nmeaDriver && srcAddress) {
+                    this.autoPilot = new SeaTalkAutoPilot(this, this.config, this.nmeaDriver, this.values, srcAddress);
+                } else if (pgn === 130860 && this.nmeaDriver && srcAddress) {
+                    this.autoPilot = new NavicoAutoPilot(this, this.config, this.nmeaDriver, this.values, srcAddress);
+                }
             }
             return true;
         }
@@ -1547,6 +1643,8 @@ export class NmeaAdapter extends Adapter {
             );
             this.signalKServer?.stop();
             this.signalKServer = null;
+            this.addressClaim?.stop();
+            this.addressClaim = null;
             this.nmeaDriver?.stop();
             callback();
         } catch {

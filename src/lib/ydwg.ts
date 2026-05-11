@@ -6,6 +6,7 @@ import type { PGN } from '@canboat/ts-pgns';
 
 import { type NmeaConfig, type PGNMessage } from '../types';
 import { GenericDriver } from './genericDriver';
+import { isYdwgAutopilotLine } from './autoPilotSniffer';
 
 export default class YDWG extends GenericDriver {
     private socketTcp: net.Socket | null = null;
@@ -61,9 +62,17 @@ export default class YDWG extends GenericDriver {
                     this.adapter.log.error(`YDGW: no parser available`);
                     return;
                 }
+                const text = msg.toString();
+                // Pre-parser raw sniff — extract PGN from the YDEN canId so we still see autopilot
+                // frames even if canboatjs drops them later. See autoPilotSniffer.ts.
+                for (const rawLine of text.split(/\r?\n/)) {
+                    if (rawLine && isYdwgAutopilotLine(rawLine)) {
+                        this.adapter.log.info(`[YDWG RAW autoPilot UDP] ${rawLine.trim()}`);
+                    }
+                }
                 try {
                     // YDEN-03 delivers N2K Frames, that could understood by canboatjs
-                    const parsedMsg = this.parser.parseString(msg.toString());
+                    const parsedMsg = this.parser.parseString(text);
                     if (parsedMsg) {
                         this.lastMessageTime = Date.now();
                         this.onData(parsedMsg);
@@ -122,6 +131,9 @@ export default class YDWG extends GenericDriver {
                     this.tcpLineBuffer = this.tcpLineBuffer.slice(newlineIdx + 1);
                     if (!line) {
                         continue;
+                    }
+                    if (isYdwgAutopilotLine(line)) {
+                        this.adapter.log.info(`[YDWG RAW autoPilot TCP] ${line}`);
                     }
                     try {
                         const msg = this.parser.parseString(line);

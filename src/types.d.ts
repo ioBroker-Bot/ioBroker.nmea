@@ -77,6 +77,20 @@ export interface NmeaConfig extends ioBroker.AdapterConfig {
     signalKEnabled: boolean;
     signalKPort: number;
     signalKBidirectional: boolean;
+
+    // ── NMEA-2000 Address Claim / device announcement ───────────────────────────────────
+    // When true, the adapter periodically broadcasts ISO Address Claim (PGN 60928), Product
+    // Information (PGN 126996), and a Raymarine-style Device Identification (PGN 126720)
+    // so the autopilot / chart-plotter recognises us as a known controller. Useful when
+    // some commands (typically Wind-Datum / advanced PGN-126208 group functions) get
+    // silently dropped by the autopilot because the source address isn't claimed.
+    announceDevice?: boolean;
+    announceSrc?: number; // CAN source address used for both announcement and outbound commands. Default 7.
+    announceUniqueNumber?: number; // 21-bit unique number for the NAME field. Default 12345.
+    announceManufacturerCode?: number; // 11-bit. Default 2046 (reserved/unassigned — fine for a private adapter).
+    announceProductCode?: number; // uint16. Default 0xC001.
+    announceModelId?: string; // up to 32 chars. Default "ioBroker.nmea".
+    announceRaymarineDeviceId?: number; // Raymarine-proprietary device byte for PGN 126720 ("S100" = 0x03). 0 disables.
 }
 
 export interface PGNMessage {

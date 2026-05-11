@@ -2,6 +2,7 @@ import { Transform } from 'node:stream';
 import { FromPgn, canbus as CanPort } from '@canboat/canboatjs';
 import { type NmeaConfig, type PGNMessage } from '../types';
 import { GenericDriver } from './genericDriver';
+import { isActisenseAutopilotLine } from './autoPilotSniffer';
 import type { PGN } from '@canboat/ts-pgns';
 
 export default class PicanM extends GenericDriver {
@@ -56,9 +57,14 @@ export default class PicanM extends GenericDriver {
             objectMode: true,
 
             transform(chunk, encoding, callback) {
-                // console.log(chunk.toString());
+                const line = chunk.toString();
+                // Pre-parser raw sniff — see ngt1.ts for the rationale. Same Actisense plaintext
+                // format, so the same matcher applies.
+                if (isActisenseAutopilotLine(line)) {
+                    adapter.log.info(`[PICAN RAW autoPilot] ${line.trim()}`);
+                }
                 try {
-                    const json = parser.parseString(chunk.toString());
+                    const json = parser.parseString(line);
                     if (json?.fields) {
                         onData?.(json);
                     }

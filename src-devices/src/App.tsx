@@ -11,18 +11,28 @@ import NmeaWindCompass from './NmeaWindComponent';
 import NmeaHistoryChartComponent from './NmeaHistoryChartComponent';
 import NmeaAutopilotComponent from './NmeaAutopilotComponent';
 import NmeaAisRadarComponent from './NmeaAisRadarComponent';
+import NmeaAnchorPositionComponent from './NmeaAnchorPositionComponent';
 
 const IOB_HOST = 'localhost';
 const IOB_PORT = 8081;
 const DEFAULT_INSTANCE = 'nmea.0';
 
-type WidgetTab = 'wind' | 'autopilot' | 'aisradar' | 'chart-aws' | 'chart-tws' | 'chart-sog' | 'chart-stw';
+type WidgetTab =
+    | 'wind'
+    | 'autopilot'
+    | 'aisradar'
+    | 'anchor'
+    | 'chart-aws'
+    | 'chart-tws'
+    | 'chart-sog'
+    | 'chart-stw';
 
 const ACTIVE_TAB_KEY = 'nmeaDevHarness.activeTab';
 const VALID_TABS: readonly WidgetTab[] = [
     'wind',
     'autopilot',
     'aisradar',
+    'anchor',
     'chart-aws',
     'chart-tws',
     'chart-sog',
@@ -229,6 +239,24 @@ class DevHistoryChart extends NmeaHistoryChartComponent {
         const w = Math.min(window.innerWidth - 40, 1100);
         const h = Math.min(window.innerHeight - 120, Math.round(w / 1.5));
         return <div style={{ width: w, height: h }}>{this.renderChartSvg(false)}</div>;
+    }
+}
+
+/**
+ * Dev variant of the anchor-position widget — renders the map at a generous size for
+ * inspection in the standalone harness.
+ */
+class DevAnchorPosition extends NmeaAnchorPositionComponent {
+    override render(): React.JSX.Element {
+        const w = Math.min(window.innerWidth - 40, 1400);
+        const h = Math.min(window.innerHeight - 120, 800);
+        return (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <div style={{ width: w, height: h }}>
+                    {(this as any).renderMap('100%', 'dev')}
+                </div>
+            </div>
+        );
     }
 }
 
@@ -528,8 +556,27 @@ export default function App(): React.JSX.Element {
         { id: 'wind', label: 'Wind Compass' },
         { id: 'autopilot', label: 'Autopilot' },
         { id: 'aisradar', label: 'AIS Radar' },
+        { id: 'anchor', label: 'Anchor' },
         ...CHART_PRESETS.map(p => ({ id: p.id, label: p.tabLabel })),
     ];
+
+    const anchorSettings = {
+        size: '2x1' as const,
+        name: 'Anchor',
+        favorite: false,
+        color: '',
+        chartHours: 0,
+        icon: '',
+        iconActive: '',
+        text: '',
+        textActive: '',
+        instance: DEFAULT_INSTANCE,
+        anchorLat: 43.144,
+        anchorLon: 16.268,
+        chainLength: 30,
+        depthAtDrop: 5,
+        mapStyle: 'osm' as const,
+    };
 
     const aisRadarSettings = {
         size: '2x1' as const,
@@ -592,6 +639,14 @@ export default function App(): React.JSX.Element {
                         widget={widget as any}
                         stateContext={ctx as any}
                         settings={aisRadarSettings as any}
+                        onHide={() => {}}
+                    />
+                ) : activeTab === 'anchor' ? (
+                    <DevAnchorPosition
+                        key="anchor"
+                        widget={widget as any}
+                        stateContext={ctx as any}
+                        settings={anchorSettings as any}
                         onHide={() => {}}
                     />
                 ) : chartSettings ? (
