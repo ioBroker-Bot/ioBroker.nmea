@@ -56,5 +56,9 @@
     "nmeaap2_depthAtDrop_help": "Water depth at the moment the anchor touched bottom",
     "nmeaap2_mapStyle": "Map style",
     "nmeaap2_mapStyle_osm": "Map",
-    "nmeaap2_mapStyle_satellite": "Satellite"
+    "nmeaap2_mapStyle_satellite": "Satellite",
+    "nmeaap2_alarmRadius": "Alarm radius state",
+    "nmeaap2_alarmRadius_help": "Numeric state (m) — when armed, the boat leaving this circle triggers the anchor alarm in the backend.",
+    "nmeaap2_isAlarm": "Alarm armed state",
+    "nmeaap2_isAlarm_help": "Boolean state — true while the anchor alarm is armed. Toggle from the widget dialog."
 }

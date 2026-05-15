@@ -34,6 +34,8 @@ import type {
     ButtonProps,
     ToggleButtonProps,
     ToggleButtonGroupProps,
+    SwitchProps,
+    TextFieldProps,
 } from '@mui/material';
 import type { ConfigItemPanel, ConfigItemTabs } from '@iobroker/json-config';
 import L from 'leaflet';
@@ -47,6 +49,8 @@ const IconButton: React.ComponentType<IconButtonProps> = MuiMaterial?.IconButton
 const Button: React.ComponentType<ButtonProps> = MuiMaterial?.Button;
 const ToggleButton: React.ComponentType<ToggleButtonProps> = MuiMaterial?.ToggleButton;
 const ToggleButtonGroup: React.ComponentType<ToggleButtonGroupProps> = MuiMaterial?.ToggleButtonGroup;
+const Switch: React.ComponentType<SwitchProps> = MuiMaterial?.Switch;
+const TextField: React.ComponentType<TextFieldProps> = MuiMaterial?.TextField;
 const CloseIcon: React.ComponentType<any> = MuiIcons?.Close;
 const AnchorIcon: React.ComponentType<any> = MuiIcons?.Anchor;
 const SailingIcon: React.ComponentType<any> = MuiIcons?.Sailing;
@@ -67,6 +71,19 @@ interface AnchorPositionSettings extends CustomWidgetPlugin {
     positionLat?: string;
     /** State ID returning the current boat longitude as a number (decimal degrees). */
     positionLon?: string;
+    /**
+     * State ID holding the alarm-circle radius in metres (number). When set together with
+     * `isAlarm` it unlocks the on-dialog controls and the alarm-circle overlay. The backend is
+     * expected to watch the same state and raise the actual alarm when the boat leaves the
+     * circle — this widget only draws the boundary and writes the radius / armed flag back.
+     */
+    alarmRadius?: string;
+    /**
+     * State ID holding the alarm-armed flag (boolean). When true the circle is drawn on the map;
+     * when false the circle stays hidden but the controls remain available so the operator can
+     * re-arm without leaving the dialog.
+     */
+    isAlarm?: string;
     /** Length of deployed chain/rope in metres. Drives the swing-circle radius. */
     chainLength?: number;
     /**
@@ -95,6 +112,12 @@ interface AnchorPositionState extends WidgetGenericState {
      * / positionLon updates arrive. Rendered as a red heatmap-style trail on the map.
      */
     trail: { lat: number; lon: number; ts: number }[];
+    /** Resolved alarm-circle radius in metres (mirrors the configured `alarmRadius` state). */
+    alarmRadius: number | null;
+    /** Resolved alarm-armed flag (mirrors the configured `isAlarm` state). */
+    isAlarm: boolean | null;
+    /** Local draft of the alarm-radius text input — committed to the state on blur / Enter. */
+    alarmRadiusDraft: string;
     dialogOpen: boolean;
 }
 
@@ -116,6 +139,7 @@ const COLORS = {
     chain: '#ffeb3b', // yellow — visually links anchor to boat (swing line)
     swingRing: '#ffeb3b', // yellow ring at chain-length radius
     trail: '#ff1744', // bright red — position-history heatmap dots
+    alarmRing: '#ff9100', // orange — alarm boundary, distinct from anchor red & swing yellow
 } as const;
 
 /**
@@ -228,6 +252,8 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             swing: L.Circle | null;
             /** Heatmap-style red dots for the recent position history. */
             trail: L.LayerGroup;
+            /** Alarm boundary (orange) — drawn at `state.alarmRadius` around the anchor when armed. */
+            alarm: L.Circle | null;
             tile: L.TileLayer;
         }
     >();
@@ -246,6 +272,9 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             boatLon: null,
             currentDepth: null,
             trail: [],
+            alarmRadius: null,
+            isAlarm: null,
+            alarmRadiusDraft: '',
             dialogOpen: false,
         };
     }
@@ -289,6 +318,18 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                         help: 'nmeaap2_depthAtDrop_help',
                         sm: 6,
                     },
+                    alarmRadius: {
+                        type: 'objectId',
+                        label: 'nmeaap2_alarmRadius',
+                        help: 'nmeaap2_alarmRadius_help',
+                        sm: 6,
+                    },
+                    isAlarm: {
+                        type: 'objectId',
+                        label: 'nmeaap2_isAlarm',
+                        help: 'nmeaap2_isAlarm_help',
+                        sm: 6,
+                    },
                     mapStyle: {
                         type: 'select',
                         label: 'nmeaap2_mapStyle',
@@ -323,7 +364,9 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             p.anchorLat !== s.anchorLat ||
             p.anchorLon !== s.anchorLon ||
             p.positionLat !== s.positionLat ||
-            p.positionLon !== s.positionLon
+            p.positionLon !== s.positionLon ||
+            p.alarmRadius !== s.alarmRadius ||
+            p.isAlarm !== s.isAlarm
         ) {
             this.unsubscribeAll();
             // Drop any stale resolved values; they'll be refilled by the new bindings.
@@ -333,6 +376,9 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                 boatLat: null,
                 boatLon: null,
                 trail: [],
+                alarmRadius: null,
+                isAlarm: null,
+                alarmRadiusDraft: '',
             } as AnchorPositionState);
             this.subscribeAll();
         }
@@ -346,7 +392,9 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             prevState.anchorLon !== this.state.anchorLon ||
             prevState.boatLat !== this.state.boatLat ||
             prevState.boatLon !== this.state.boatLon ||
-            prevState.trail !== this.state.trail
+            prevState.trail !== this.state.trail ||
+            prevState.alarmRadius !== this.state.alarmRadius ||
+            prevState.isAlarm !== this.state.isAlarm
         ) {
             this.updateAllOverlays();
         }
@@ -410,6 +458,26 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
 
         // Live water depth — used in the readout overlay only; the adapter path is fixed.
         bindNum(`${instance}.waterDepth.depth`, v => this.setState({ currentDepth: v } as AnchorPositionState));
+
+        // Alarm controls — both state IDs are optional; they unlock the in-dialog UI and the
+        // alarm-boundary overlay only when configured.
+        if (s.alarmRadius) {
+            bindNum(s.alarmRadius, v =>
+                this.setState(prev => ({
+                    alarmRadius: v,
+                    // Keep the local text-input draft in sync as long as the user isn't editing it;
+                    // a non-empty draft means the user has a pending edit so we leave it alone.
+                    alarmRadiusDraft:
+                        prev.alarmRadiusDraft === '' ? (v != null ? String(v) : '') : prev.alarmRadiusDraft,
+                })),
+            );
+        }
+        if (s.isAlarm) {
+            subscribe(s.isAlarm, (_id, state) => {
+                const v = state?.val;
+                this.setState({ isAlarm: v == null ? null : Boolean(v) } as AnchorPositionState);
+            });
+        }
 
         // Kick off a one-shot history fetch for the trail. Live updates from the subscriptions
         // above will continue to append to whatever this returns.
@@ -589,6 +657,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             rode,
             swing: null,
             trail,
+            alarm: null,
             tile,
         });
         this.currentTileStyle.set(key, this.props.settings.mapStyle ?? 'osm');
@@ -638,7 +707,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             return;
         }
         const { chainLength, depthAtDrop, mapStyle } = this.props.settings;
-        const { anchorLat, anchorLon, boatLat, boatLon, trail } = this.state;
+        const { anchorLat, anchorLon, boatLat, boatLon, trail, alarmRadius, isAlarm } = this.state;
         const haveAnchor = anchorLat != null && anchorLon != null && isFinite(anchorLat) && isFinite(anchorLon);
         const haveBoat = boatLat != null && boatLon != null && isFinite(boatLat) && isFinite(boatLon);
 
@@ -706,6 +775,32 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                     }),
                 );
             }
+        }
+
+        // Alarm boundary — orange circle around the anchor at the user-set alarm radius. Visible
+        // only when the operator has armed the alarm (`isAlarm === true`) and a valid radius is
+        // known. Backend services watch the underlying states and trigger the real alarm; the
+        // widget just paints the geometry.
+        const haveAlarm =
+            haveAnchor && isAlarm === true && alarmRadius != null && isFinite(alarmRadius) && alarmRadius > 0;
+        if (haveAlarm) {
+            if (!overlays.alarm) {
+                overlays.alarm = L.circle([anchorLat, anchorLon], {
+                    radius: alarmRadius,
+                    color: COLORS.alarmRing,
+                    weight: 3,
+                    opacity: 0.9,
+                    dashArray: '8 6',
+                    fillColor: COLORS.alarmRing,
+                    fillOpacity: 0.08,
+                }).addTo(map);
+            } else {
+                overlays.alarm.setLatLng([anchorLat, anchorLon]);
+                overlays.alarm.setRadius(alarmRadius);
+                overlays.alarm.setStyle({ opacity: 0.9, fillOpacity: 0.08 });
+            }
+        } else if (overlays.alarm) {
+            overlays.alarm.setStyle({ opacity: 0, fillOpacity: 0 });
         }
 
         // Swing circle — drawn around the anchor at the effective swing radius (chain length
@@ -788,6 +883,53 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             this.updateOverlays(key, true);
         }
     }
+
+    /**
+     * Commit the local alarm-radius text input to the configured state. Trims whitespace, parses
+     * as a number, clamps to a reasonable minimum (1 m) to avoid degenerate circles. Silently
+     * no-ops on an invalid input — the draft stays so the user can correct it.
+     */
+    private commitAlarmRadius = (): void => {
+        const s = this.props.settings;
+        if (!s.alarmRadius) {
+            return;
+        }
+        const raw = this.state.alarmRadiusDraft.trim();
+        if (raw === '') {
+            // Empty draft → leave the existing radius value untouched; sync the draft to it.
+            this.setState(prev => ({
+                alarmRadiusDraft: prev.alarmRadius != null ? String(prev.alarmRadius) : '',
+            }));
+            return;
+        }
+        const v = Number(raw.replace(',', '.'));
+        if (!isFinite(v) || v < 1) {
+            return;
+        }
+        const rounded = Math.round(v);
+        try {
+            void this.props.stateContext.getSocket().setState(s.alarmRadius, rounded);
+        } catch (e) {
+            console.warn('[NmeaAnchorPosition] setState alarmRadius failed', e);
+        }
+        // Optimistic local update so the circle redraws immediately rather than waiting for the
+        // subscription roundtrip.
+        this.setState({ alarmRadius: rounded, alarmRadiusDraft: String(rounded) } as AnchorPositionState);
+    };
+
+    /** Arm / disarm the alarm by writing the boolean state. Optimistically updates the local flag. */
+    private setAlarmArmed = (armed: boolean): void => {
+        const s = this.props.settings;
+        if (!s.isAlarm) {
+            return;
+        }
+        try {
+            void this.props.stateContext.getSocket().setState(s.isAlarm, armed);
+        } catch (e) {
+            console.warn('[NmeaAnchorPosition] setState isAlarm failed', e);
+        }
+        this.setState({ isAlarm: armed } as AnchorPositionState);
+    };
 
     private currentDistanceM(): number | null {
         const { anchorLat, anchorLon, boatLat, boatLon } = this.state;
@@ -1083,6 +1225,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                 </Box>
                 <DialogContent
                     sx={{
+                        position: 'relative',
                         display: 'flex',
                         alignItems: 'stretch',
                         justifyContent: 'stretch',
@@ -1091,8 +1234,89 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                     }}
                 >
                     <Box sx={{ width: '100%', height: '100%' }}>{this.renderMap('100%', 'dialog')}</Box>
+                    {this.renderAlarmControls()}
                 </DialogContent>
             </Dialog>
+        );
+    }
+
+    /**
+     * Bottom-left floating panel for arming the anchor alarm and setting its radius. Rendered
+     * only when *both* state IDs are configured (`alarmRadius` and `isAlarm`); if either is
+     * missing the operator can't fully use the alarm, so we hide the controls entirely rather
+     * than showing a half-working UI. The backend is expected to watch these states and raise
+     * the actual alarm — the widget only writes the values.
+     */
+    private renderAlarmControls(): React.JSX.Element | null {
+        const s = this.props.settings;
+        if (!s.alarmRadius || !s.isAlarm) {
+            return null;
+        }
+        const { isAlarm, alarmRadiusDraft } = this.state;
+        const armed = isAlarm === true;
+        return (
+            <Box
+                sx={{
+                    position: 'absolute',
+                    bottom: 16,
+                    left: 16,
+                    zIndex: 1000,
+                    bgcolor: 'rgba(0,0,0,0.7)',
+                    color: COLORS.contrast,
+                    px: 1.5,
+                    py: 1,
+                    borderRadius: '8px',
+                    border: `1px solid ${armed ? COLORS.alarmRing : 'rgba(255,255,255,0.15)'}`,
+                    backdropFilter: 'blur(3px)',
+                    display: 'flex',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 1.5,
+                }}
+            >
+                <Typography sx={{ fontSize: 12, fontWeight: 700, opacity: 0.8, mr: 0.5 }}>ALARM</Typography>
+                <TextField
+                    type="number"
+                    size="small"
+                    value={alarmRadiusDraft}
+                    placeholder="radius"
+                    onChange={e => this.setState({ alarmRadiusDraft: e.target.value } as AnchorPositionState)}
+                    onBlur={this.commitAlarmRadius}
+                    onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                            this.commitAlarmRadius();
+                            (e.target as HTMLInputElement).blur();
+                        }
+                    }}
+                    slotProps={{
+                        htmlInput: { min: 1, step: 1, inputMode: 'numeric' },
+                        input: {
+                            endAdornment: <Typography sx={{ fontSize: 12, opacity: 0.6, ml: 0.5 }}>m</Typography>,
+                            sx: { color: COLORS.contrast },
+                        },
+                    }}
+                    sx={{
+                        width: 110,
+                        '& .MuiOutlinedInput-notchedOutline': {
+                            borderColor: 'rgba(255,255,255,0.25)',
+                        },
+                        '&:hover .MuiOutlinedInput-notchedOutline': {
+                            borderColor: 'rgba(255,255,255,0.4)',
+                        },
+                    }}
+                />
+                <Switch
+                    checked={armed}
+                    onChange={(_e, checked) => this.setAlarmArmed(checked)}
+                    sx={{
+                        '& .MuiSwitch-switchBase.Mui-checked': { color: COLORS.alarmRing },
+                        '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                            backgroundColor: COLORS.alarmRing,
+                        },
+                    }}
+                />
+                <Typography sx={{ fontSize: 12, opacity: 0.8 }}>{armed ? 'armed' : 'off'}</Typography>
+            </Box>
         );
     }
 
