@@ -55,7 +55,7 @@ const CloseIcon: React.ComponentType<any> = MuiIcons?.Close;
 const AnchorIcon: React.ComponentType<any> = MuiIcons?.Anchor;
 const SailingIcon: React.ComponentType<any> = MuiIcons?.Sailing;
 
-interface AnchorPositionSettings extends CustomWidgetPlugin {
+export interface AnchorPositionSettings extends CustomWidgetPlugin {
     /** e.g. 'nmea.0' — used for live depth subscription. */
     instance?: string;
     /**
@@ -71,26 +71,13 @@ interface AnchorPositionSettings extends CustomWidgetPlugin {
     positionLat?: string;
     /** State ID returning the current boat longitude as a number (decimal degrees). */
     positionLon?: string;
-    /**
-     * State ID holding the alarm-circle radius in metres (number). When set together with
-     * `isAlarm` it unlocks the on-dialog controls and the alarm-circle overlay. The backend is
-     * expected to watch the same state and raise the actual alarm when the boat leaves the
-     * circle — this widget only draws the boundary and writes the radius / armed flag back.
-     */
-    alarmRadius?: string;
-    /**
-     * State ID holding the alarm-armed flag (boolean). When true the circle is drawn on the map;
-     * when false the circle stays hidden but the controls remain available so the operator can
-     * re-arm without leaving the dialog.
-     */
-    isAlarm?: string;
     /** Length of deployed chain/rope in metres. Drives the swing-circle radius. */
-    chainLength?: number;
+    chainLength?: string;
     /**
-     * Depth at the moment the anchor touched bottom, in metres. Used for an
+     * Depth at the moment the anchor touched bottom as object ID, in metres. Used for an
      *  effective-scope hint (rode = sqrt(chain² - depth²) gives the horizontal swing).
      */
-    depthAtDrop?: number;
+    depthAtDrop?: string;
     /** Map base layer — 'osm' for normal vector-style tiles, 'satellite' for imagery. */
     mapStyle?: 'osm' | 'satellite';
 }
@@ -106,9 +93,11 @@ interface AnchorPositionState extends WidgetGenericState {
     boatLon: number | null;
     /** Live water depth from `waterDepth.depth` (PGN 128267). */
     currentDepth: number | null;
+    chainLength: number | null;
+    depthAtDrop: number | null;
     /**
-     * Sliding-window position history (last `TRAIL_WINDOW_MS`). Older entries are dropped on every
-     * append. Loaded from the configured history adapter on mount and extended live as positionLat
+     * Sliding-window position history (last `TRAIL_WINDOW_MS`). Older entries are dropped on every append.
+     * Loaded from the configured history adapter on mount and extended live as positionLat
      * / positionLon updates arrive. Rendered as a red heatmap-style trail on the map.
      */
     trail: { lat: number; lon: number; ts: number }[];
@@ -116,6 +105,8 @@ interface AnchorPositionState extends WidgetGenericState {
     alarmRadius: number | null;
     /** Resolved alarm-armed flag (mirrors the configured `isAlarm` state). */
     isAlarm: boolean | null;
+    /** Resolved when the anchor alarm is activated/deactivated */
+    isAlarmEnabled: boolean | null;
     /** Local draft of the alarm-radius text input — committed to the state on blur / Enter. */
     alarmRadiusDraft: string;
     dialogOpen: boolean;
@@ -139,7 +130,7 @@ const COLORS = {
     chain: '#ffeb3b', // yellow — visually links anchor to boat (swing line)
     swingRing: '#ffeb3b', // yellow ring at chain-length radius
     trail: '#ff1744', // bright red — position-history heatmap dots
-    alarmRing: '#ff9100', // orange — alarm boundary, distinct from anchor red & swing yellow
+    alarmRing: '#00e676', // green — alarm boundary "safe zone" reading, distinct from anchor red & swing yellow
 } as const;
 
 /**
@@ -174,10 +165,10 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 }
 
 /**
- * Effective horizontal swing radius from rode length and depth at drop. Rode forms the
+ * Effective horizontal swing radius from rode length and depth at a drop. Rode forms the
  * hypotenuse of a right triangle with the depth as the vertical leg, so the horizontal leg
- * (= max swing radius from the anchor's foot) is sqrt(chain² - depth²). When depth ≥ chain
- * the math breaks (chain too short for the depth) and we fall back to the chain length itself.
+ * (= max swing radius from the anchor's foot) is sqrt(chain² - depth²). When depth ≥ chain,
+ * the math breaks (the chain is too short for the depth), and we fall back to the chain length itself.
  */
 function effectiveSwingRadius(chainM: number, depthM: number | undefined | null): number {
     if (depthM == null || !isFinite(depthM) || depthM <= 0) {
@@ -192,20 +183,19 @@ function effectiveSwingRadius(chainM: number, depthM: number | undefined | null)
 // SVG-data-URL anchor & boat markers — sized & coloured to read well at typical zoom levels
 // without needing an external icon set. Returned as Leaflet DivIcons via inline HTML.
 function buildAnchorIcon(): L.DivIcon {
+    // U+FE0E forces a text-style (monochrome) rendering of ⚓ so the CSS color applies — without it,
+    // most systems substitute a colored emoji glyph and ignore the color property.
     const html = `
         <div style="
             display: flex; align-items: center; justify-content: center;
             width: 32px; height: 32px;
-            border-radius: 50%;
-            background: ${COLORS.anchor};
-            border: 2px solid #000;
-            box-shadow: 0 0 6px rgba(255,82,82,0.65);
-            color: #fff;
+            color: ${COLORS.anchor};
+            font-family: 'Segoe UI Symbol', 'Apple Symbols', 'Noto Sans Symbols', sans-serif;
             font-weight: 700;
-            font-family: Roboto, Arial, sans-serif;
-            font-size: 18px;
+            font-size: 28px;
             line-height: 1;
-        ">⚓</div>
+            text-shadow: 0 0 3px rgba(0,0,0,0.85), 0 0 1px rgba(0,0,0,1);
+        ">⚓︎</div>
     `;
     return L.divIcon({
         className: 'nmea-anchor-marker',
@@ -218,18 +208,21 @@ function buildAnchorIcon(): L.DivIcon {
 function buildBoatIcon(): L.DivIcon {
     const html = `
         <div style="
-            width: 0; height: 0;
-            border-left: 10px solid transparent;
-            border-right: 10px solid transparent;
-            border-bottom: 22px solid ${COLORS.boat};
-            filter: drop-shadow(0 0 4px rgba(58,141,255,0.6));
-        "></div>
+            width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+            color: ${COLORS.boat};
+            font-family: 'Segoe UI Symbol', 'Apple Symbols', 'Noto Sans Symbols', sans-serif;
+            font-weight: 700;
+            font-size: 28px;
+            line-height: 1;
+            text-shadow: 0 0 3px rgba(0,0,0,0.85), 0 0 1px rgba(0,0,0,1);
+        ">⛵</div>
     `;
     return L.divIcon({
         className: 'nmea-boat-marker',
         html,
-        iconSize: [20, 22],
-        iconAnchor: [10, 11],
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
     });
 }
 
@@ -271,6 +264,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             boatLat: null,
             boatLon: null,
             currentDepth: null,
+            chainLength: null,
             trail: [],
             alarmRadius: null,
             isAlarm: null,
@@ -285,6 +279,12 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             schema: {
                 type: 'panel',
                 items: {
+                    instance: {
+                        type: 'instance',
+                        adapter: 'nmea',
+                        label: 'nmeaair_instance',
+                        default: 'nmea.0',
+                    },
                     anchorPosition: {
                         type: 'objectId',
                         label: 'nmeaap2_anchorPosition',
@@ -316,18 +316,6 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                         type: 'objectId',
                         label: 'nmeaap2_actualPositionLon',
                         help: 'nmeaap2_depthAtDrop_help',
-                        sm: 6,
-                    },
-                    alarmRadius: {
-                        type: 'objectId',
-                        label: 'nmeaap2_alarmRadius',
-                        help: 'nmeaap2_alarmRadius_help',
-                        sm: 6,
-                    },
-                    isAlarm: {
-                        type: 'objectId',
-                        label: 'nmeaap2_isAlarm',
-                        help: 'nmeaap2_isAlarm_help',
                         sm: 6,
                     },
                     mapStyle: {
@@ -365,8 +353,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             p.anchorLon !== s.anchorLon ||
             p.positionLat !== s.positionLat ||
             p.positionLon !== s.positionLon ||
-            p.alarmRadius !== s.alarmRadius ||
-            p.isAlarm !== s.isAlarm
+            p.depthAtDrop !== s.depthAtDrop
         ) {
             this.unsubscribeAll();
             // Drop any stale resolved values; they'll be refilled by the new bindings.
@@ -379,7 +366,8 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                 alarmRadius: null,
                 isAlarm: null,
                 alarmRadiusDraft: '',
-            } as AnchorPositionState);
+                chainLength: null,
+            } as Partial<AnchorPositionState> as unknown as AnchorPositionState);
             this.subscribeAll();
         }
         // Anything that affects the overlays gets re-applied to all attached maps. We only
@@ -449,33 +437,46 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         }
 
         // Boat position — drives both the live marker and the trail.
-        if (s.positionLat) {
-            subscribe(s.positionLat, (_id, state) => this.onBoatPositionUpdate('lat', state));
+        if (s.positionLat || s.instance) {
+            subscribe(s.positionLat || `${s.instance}.gnssPositionData.latitude`, (_id, state) =>
+                this.onBoatPositionUpdate('lat', state),
+            );
         }
-        if (s.positionLon) {
-            subscribe(s.positionLon, (_id, state) => this.onBoatPositionUpdate('lon', state));
+        if (s.positionLon || s.instance) {
+            subscribe(s.positionLon || `${s.instance}.gnssPositionData.longitude`, (_id, state) =>
+                this.onBoatPositionUpdate('lon', state),
+            );
         }
 
-        // Live water depth — used in the readout overlay only; the adapter path is fixed.
-        bindNum(`${instance}.waterDepth.depth`, v => this.setState({ currentDepth: v } as AnchorPositionState));
+        if (s.chainLength) {
+            bindNum(s.chainLength, v => this.setState({ chainLength: v } as AnchorPositionState));
+        }
+        if (s.depthAtDrop) {
+            bindNum(s.depthAtDrop, v => this.setState({ depthAtDrop: v } as AnchorPositionState));
+        }
 
         // Alarm controls — both state IDs are optional; they unlock the in-dialog UI and the
         // alarm-boundary overlay only when configured.
-        if (s.alarmRadius) {
-            bindNum(s.alarmRadius, v =>
+        if (instance) {
+            // Live water depth — used in the readout overlay only; the adapter path is fixed.
+            bindNum(`${instance}.waterDepth.depth`, v => this.setState({ currentDepth: v } as AnchorPositionState));
+
+            bindNum(`${instance}.anchorAlarm.alarmRadius`, v =>
                 this.setState(prev => ({
                     alarmRadius: v,
                     // Keep the local text-input draft in sync as long as the user isn't editing it;
-                    // a non-empty draft means the user has a pending edit so we leave it alone.
+                    // a non-empty draft means the user has a pending edit, so we leave it alone.
                     alarmRadiusDraft:
                         prev.alarmRadiusDraft === '' ? (v != null ? String(v) : '') : prev.alarmRadiusDraft,
                 })),
             );
-        }
-        if (s.isAlarm) {
-            subscribe(s.isAlarm, (_id, state) => {
+            subscribe(`${instance}.anchorAlarm.isAlarm`, (_id, state) => {
                 const v = state?.val;
                 this.setState({ isAlarm: v == null ? null : Boolean(v) } as AnchorPositionState);
+            });
+            subscribe(`${instance}.anchorAlarm.isActive`, (_id, state) => {
+                const v = state?.val;
+                this.setState({ isAlarmEnabled: v == null ? null : Boolean(v) } as AnchorPositionState);
             });
         }
 
@@ -497,17 +498,18 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
 
     /**
      * Handle a live position update from either the lat or lon state subscription. Updates the
-     * matching field in component state and appends a new entry to the trail when both lat & lon
+     * matching field in the component state and appends a new entry to the trail when both lat & lon
      * are known (i.e. we have a complete fix). Old trail entries past the window are dropped.
      */
     private onBoatPositionUpdate(which: 'lat' | 'lon', state: ioBroker.State | null | undefined): void {
-        const v = state?.val != null ? Number(state.val) : null;
+        const v =
+            state?.val != null ? Number(typeof state.val === 'string' ? state.val.replace(',', '.') : state.val) : null;
         const ts = typeof state?.ts === 'number' ? state.ts : Date.now();
         this.setState(prev => {
             const newLat = which === 'lat' ? v : prev.boatLat;
             const newLon = which === 'lon' ? v : prev.boatLon;
             const next: Partial<AnchorPositionState> = which === 'lat' ? { boatLat: v } : { boatLon: v };
-            // Only extend the trail when we have a complete, finite fix and it actually moved
+            // Only extend the trail when we have a complete, finite fix, and it actually moved
             // (avoids duplicate points from lat & lon updating in sequence at the same coords).
             if (newLat != null && newLon != null && isFinite(newLat) && isFinite(newLon)) {
                 const cutoff = Date.now() - TRAIL_WINDOW_MS;
@@ -519,7 +521,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                     (next as AnchorPositionState).trail = filtered;
                 }
             }
-            return next;
+            return next as AnchorPositionState;
         });
     }
 
@@ -544,6 +546,20 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         const start = end - TRAIL_WINDOW_MS;
         try {
             const socket = ctx.getSocket();
+            // Check if historyAdapter alive
+            // Check if positionLat/Lon has history enabled
+            const alive = await socket.getState(`system.adapter.${historyAdapter}.alive`);
+            if (!alive?.val) {
+                return;
+            }
+            const positionLat = await socket.getObject(s.positionLat);
+            if (!positionLat?.common?.custom?.[historyAdapter]) {
+                return;
+            }
+            const positionLon = await socket.getObject(s.positionLon);
+            if (!positionLon?.common?.custom?.[historyAdapter]) {
+                return;
+            }
             const [latRows, lonRows] = await Promise.all([
                 socket.getHistory(s.positionLat, { instance: historyAdapter, start, end, aggregate: 'none' }),
                 socket.getHistory(s.positionLon, { instance: historyAdapter, start, end, aggregate: 'none' }),
@@ -557,7 +573,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             }
             // Index lat rows by floor-second so a tiny clock skew between the two history streams
             // doesn't prevent us from pairing the corresponding samples (NMEA GPS PGNs typically
-            // emit lat & lon in the same telegram, so their write timestamps are within a few ms).
+            // emit lat & lon in the same telegram, so their writing timestamps are within a few ms).
             const latByTs = new Map<number, number>();
             for (const r of latRows as Array<{ val: unknown; ts?: number }>) {
                 const v = Number(r.val);
@@ -648,7 +664,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         const anchorMarker = L.marker([0, 0], { icon: anchorIcon, opacity: 0 }).addTo(map);
         const boatMarker = L.marker([0, 0], { icon: boatIcon, opacity: 0 }).addTo(map);
         // Swing circle is created lazily once we know we have a chain length — it's rendered
-        // on top of the rode line so the boundary is visible even when the boat sits near it.
+        // on top of the rode line, so the boundary is visible even when the boat sits near it.
 
         this.maps.set(key, map);
         this.overlays.set(key, {
@@ -684,8 +700,8 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                 },
             );
         }
-        // CartoDB Voyager — clean, low-saturation OSM-style basemap that works as a "normal"
-        // chart background. Looks good in light or dark UI without overpowering the markers.
+        // CartoDB Voyager — a clean, low-saturation OSM-style basemap that works as a "normal"
+        // chart background. It looks good in light or dark UI without overpowering the markers.
         return L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
             subdomains: ['a', 'b', 'c', 'd'],
             maxZoom: 19,
@@ -706,8 +722,9 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         if (!map || !overlays) {
             return;
         }
-        const { chainLength, depthAtDrop, mapStyle } = this.props.settings;
-        const { anchorLat, anchorLon, boatLat, boatLon, trail, alarmRadius, isAlarm } = this.state;
+        const { mapStyle } = this.props.settings;
+        const { depthAtDrop, anchorLat, anchorLon, boatLat, boatLon, trail, alarmRadius, isAlarm, chainLength } =
+            this.state;
         const haveAnchor = anchorLat != null && anchorLon != null && isFinite(anchorLat) && isFinite(anchorLon);
         const haveBoat = boatLat != null && boatLon != null && isFinite(boatLat) && isFinite(boatLon);
 
@@ -740,7 +757,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             overlays.boat.setOpacity(0);
         }
 
-        // Rode (anchor → boat dashed line) — only when both points are known.
+        // Rode (anchor → boat-dashed line) — only when both points are known.
         if (haveAnchor && haveBoat) {
             overlays.rode.setLatLngs([
                 [anchorLat, anchorLon],
@@ -777,7 +794,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             }
         }
 
-        // Alarm boundary — orange circle around the anchor at the user-set alarm radius. Visible
+        // Alarm boundary — green circle around the anchor at the user-set alarm radius. Visible
         // only when the operator has armed the alarm (`isAlarm === true`) and a valid radius is
         // known. Backend services watch the underlying states and trigger the real alarm; the
         // widget just paints the geometry.
@@ -826,7 +843,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
             overlays.swing.setStyle({ opacity: 0, fillOpacity: 0 });
         }
 
-        // Auto-fit the view: on first attach OR when the user just changed the anchor/style.
+        // Auto-fit the view: on the first attachment OR when the user just changed the anchor/style.
         // For routine boat-position updates we leave the existing zoom/pan so the user can
         // freely pan around without the map snapping back every second.
         if (fitView) {
@@ -891,7 +908,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
      */
     private commitAlarmRadius = (): void => {
         const s = this.props.settings;
-        if (!s.alarmRadius) {
+        if (!s.instance) {
             return;
         }
         const raw = this.state.alarmRadiusDraft.trim();
@@ -908,7 +925,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         }
         const rounded = Math.round(v);
         try {
-            void this.props.stateContext.getSocket().setState(s.alarmRadius, rounded);
+            void this.props.stateContext.getSocket().setState(`${s.instance}.anchorAlarm.alarmRadius`, rounded);
         } catch (e) {
             console.warn('[NmeaAnchorPosition] setState alarmRadius failed', e);
         }
@@ -920,11 +937,11 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
     /** Arm / disarm the alarm by writing the boolean state. Optimistically updates the local flag. */
     private setAlarmArmed = (armed: boolean): void => {
         const s = this.props.settings;
-        if (!s.isAlarm) {
+        if (!s.instance) {
             return;
         }
         try {
-            void this.props.stateContext.getSocket().setState(s.isAlarm, armed);
+            void this.props.stateContext.getSocket().setState(`${s.instance}.anchorAlarm.isActive`, armed);
         } catch (e) {
             console.warn('[NmeaAnchorPosition] setState isAlarm failed', e);
         }
@@ -980,8 +997,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
      */
     private renderReadouts(compact: boolean): React.JSX.Element {
         const distance = this.currentDistanceM();
-        const { chainLength, depthAtDrop } = this.props.settings;
-        const { currentDepth } = this.state;
+        const { currentDepth, chainLength, depthAtDrop } = this.state;
         const distanceText = distance != null ? `${Math.round(distance)} m` : '—';
         const distanceHi =
             chainLength != null && distance != null && distance > effectiveSwingRadius(chainLength, depthAtDrop);
@@ -994,6 +1010,9 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                     right: 0,
                     p: 1,
                     pointerEvents: 'none',
+                    // Sit above Leaflet's panes (the zoom-animation pane briefly raises its z-index
+                    // mid-animation, which would otherwise cover the readouts for a few frames).
+                    zIndex: 1000,
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 0.5,
@@ -1146,7 +1165,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
         );
     }
 
-    private renderDialog(): React.JSX.Element | null {
+    protected renderDialog(): React.JSX.Element | null {
         if (!this.state.dialogOpen) {
             return null;
         }
@@ -1243,13 +1262,13 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
     /**
      * Bottom-left floating panel for arming the anchor alarm and setting its radius. Rendered
      * only when *both* state IDs are configured (`alarmRadius` and `isAlarm`); if either is
-     * missing the operator can't fully use the alarm, so we hide the controls entirely rather
+     *  missing, the operator can't fully use the alarm, so we hide the controls entirely rather
      * than showing a half-working UI. The backend is expected to watch these states and raise
      * the actual alarm — the widget only writes the values.
      */
     private renderAlarmControls(): React.JSX.Element | null {
         const s = this.props.settings;
-        if (!s.alarmRadius || !s.isAlarm) {
+        if (!s.instance) {
             return null;
         }
         const { isAlarm, alarmRadiusDraft } = this.state;

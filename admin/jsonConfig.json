@@ -603,6 +603,41 @@
                     "sm": 12
                 }
             }
+        },
+        "anchor": {
+            "type": "panel",
+            "label": "Anchor",
+            "items": {
+                "auxPosition": {
+                    "newLine": true,
+                    "label": "Auxiliary position state",
+                    "help": "Optional foreign state that provides the boat position for the anchor alarm. Accepts 'lat;lon' / 'lat,lon' strings or JSON {lat, lon}. Leave empty to use the NMEA GNSS position",
+                    "type": "objectId",
+                    "default": "",
+                    "sm": 12,
+                    "md": 6
+                },
+                "chainLength": {
+                    "newLine": true,
+                    "label": "Chain length state",
+                    "help": "Foreign state holding the currently deployed chain length in meters (e.g. from a windlass counter). Drives the anchor-drop tracker: snapshots the drop position when the chain pays out, then a 'bottom reached' position when chain length ≈ water depth",
+                    "type": "objectId",
+                    "default": "",
+                    "sm": 12,
+                    "md": 6
+                },
+                "notificationInstance": {
+                    "newLine": true,
+                    "label": "Notification instance",
+                    "help": "If set, the adapter will create notifications with this instance when the anchor is dropped or lifted",
+                    "type": "instance",
+                    "adapters": ["telegram", "pushover"],
+                    "min": 0,
+                    "default": 0,
+                    "sm": 12,
+                    "md": 6
+                }
+            }
         }
     }
 }

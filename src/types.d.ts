@@ -78,6 +78,25 @@ export interface NmeaConfig extends ioBroker.AdapterConfig {
     signalKPort: number;
     signalKBidirectional: boolean;
 
+    /**
+     * Optional foreign state ID providing a boat position as a "lat;lon" string or as a JSON
+     * `{ lat, lon }`. When set, the anchor-alarm watcher uses this state in preference to the
+     * NMEA-decoded GNSS position — handy when the boat carries an aux GPS that publishes to a
+     * different adapter, or to feed the alarm from a non-NMEA source. Empty string ⇒ NMEA only.
+     */
+    auxPosition?: string;
+    /**
+     * Optional foreign state ID providing a chain length in meters as a number or numeric string.
+     * When set, the anchor-alarm watcher uses this state in preference to the fixed chain length configured in the adapter settings — handy when the chain length is variable (e.g. a windlass with a rotary encoder). Empty string ⇒ fixed length from settings only.
+     */
+    chainLength?: string;
+    /**
+     * Optional ioBroker instance to receive anchor-alarm notifications (e.g. "telegram.0",
+     * "pushover.0"). The adapter calls `sendTo(<instance>, <text>)` when the alarm triggers.
+     * Empty / "0" / unset ⇒ notifications disabled.
+     */
+    notificationInstance?: string;
+
     // ── NMEA-2000 Address Claim / device announcement ───────────────────────────────────
     // When true, the adapter periodically broadcasts ISO Address Claim (PGN 60928), Product
     // Information (PGN 126996), and a Raymarine-style Device Identification (PGN 126720)
@@ -90,7 +109,7 @@ export interface NmeaConfig extends ioBroker.AdapterConfig {
     announceManufacturerCode?: number; // 11-bit. Default 2046 (reserved/unassigned — fine for a private adapter).
     announceProductCode?: number; // uint16. Default 0xC001.
     announceModelId?: string; // up to 32 chars. Default "ioBroker.nmea".
-    announceRaymarineDeviceId?: number; // Raymarine-proprietary device byte for PGN 126720 ("S100" = 0x03). 0 disables.
+    announceRaymarineDeviceId?: number; // Raymarine-proprietary device byte for PGN 126720 ("S100" = 0x03). 0 disabled.
 }
 
 export interface PGNMessage {

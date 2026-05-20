@@ -11,21 +11,13 @@ import NmeaWindCompass from './NmeaWindComponent';
 import NmeaHistoryChartComponent from './NmeaHistoryChartComponent';
 import NmeaAutopilotComponent from './NmeaAutopilotComponent';
 import NmeaAisRadarComponent from './NmeaAisRadarComponent';
-import NmeaAnchorPositionComponent from './NmeaAnchorPositionComponent';
+import NmeaAnchorPositionComponent, { AnchorPositionSettings } from './NmeaAnchorPositionComponent';
 
 const IOB_HOST = 'localhost';
 const IOB_PORT = 8081;
 const DEFAULT_INSTANCE = 'nmea.0';
 
-type WidgetTab =
-    | 'wind'
-    | 'autopilot'
-    | 'aisradar'
-    | 'anchor'
-    | 'chart-aws'
-    | 'chart-tws'
-    | 'chart-sog'
-    | 'chart-stw';
+type WidgetTab = 'wind' | 'autopilot' | 'aisradar' | 'anchor' | 'chart-aws' | 'chart-tws' | 'chart-sog' | 'chart-stw';
 
 const ACTIVE_TAB_KEY = 'nmeaDevHarness.activeTab';
 const VALID_TABS: readonly WidgetTab[] = [
@@ -135,7 +127,7 @@ const tabButtonStyle = (active: boolean): React.CSSProperties => ({
 /**
  * Minimal IStateContext implementation that routes getState/removeState to a real
  * `@iobroker/socket-client` Connection. Fan-out per ID is handled locally so the
- * same state can have multiple subscribers (widget instance + dev UI for example).
+ * same state can have multiple subscribers (widget instance + dev UI, for example).
  */
 class DevStateContext implements IStateContext {
     private handlers = new Map<string, Set<StateChangeListener>>();
@@ -209,11 +201,20 @@ class DevStateContext implements IStateContext {
         return this.socket;
     }
 
+    getImagePath(fileName: string | null | undefined): string | null {
+        return fileName || '';
+    }
+
     destroy(): void {
         for (const id of this.handlers.keys()) {
             this.socket.unsubscribeState(id);
         }
         this.handlers.clear();
+    }
+
+    setCoordinates(latitude: number | null, longitude: number | null): void {
+        this.latitude = latitude;
+        this.longitude = longitude;
     }
 }
 
@@ -251,10 +252,12 @@ class DevAnchorPosition extends NmeaAnchorPositionComponent {
         const w = Math.min(window.innerWidth - 40, 1400);
         const h = Math.min(window.innerHeight - 120, 800);
         return (
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <div style={{ width: w, height: h }}>
-                    {(this as any).renderMap('100%', 'dev')}
-                </div>
+            <div
+                style={{ display: 'flex', justifyContent: 'center' }}
+                onClick={() => this.setState({ dialogOpen: true })}
+            >
+                <div style={{ width: w, height: h }}>{(this as any).renderMap('100%', 'dev')}</div>
+                {this.state.dialogOpen ? this.renderDialog() : null}
             </div>
         );
     }
@@ -284,11 +287,11 @@ class DevAisRadar extends NmeaAisRadarComponent {
  * Dev variant of the autopilot dial — renders the half-circle SVG directly plus the mode +
  * heading-adjust controls, so the widget can be tested standalone without the host shell.
  *
- * In dev we don't usually have an autopilot connected; instead a small simulator pushes
+ * In dev, we don't usually have an autopilot connected; instead, a small simulator pushes
  * synthetic values into the component's state every 200 ms so the dial demonstrates HDG
  * drift, locked-heading display, AWA pointer, and rudder bar against realistic-looking data.
  * The simulator's mode is controlled by a local `simMode` field — clicking the widget's
- * mode buttons updates it directly, bypassing the socket write that would otherwise be
+ * mode buttons updates it directly, bypassing the socket writing that would otherwise be
  * required for the change to be visible.
  */
 class DevAutopilot extends NmeaAutopilotComponent {
@@ -344,9 +347,9 @@ class DevAutopilot extends NmeaAutopilotComponent {
         const h = Math.min(window.innerHeight - 200, Math.round(w / aspect));
 
         // Re-implement the controls inline so we can short-circuit to `simMode` instead of
-        // routing through the (no-op-in-dev) socket write. Heading-adjust buttons just bump
+        // routing through the (no-op-in-dev) socket writing. Heading-adjust buttons just bump
         // the simulated locked heading directly, ignoring boolean-button semantics.
-        // Same colour scheme as the production widget — distinct hue per mode so the active
+        // The same colour scheme as the production widget — distinct hue per mode, so the active
         // state is recognisable at a glance (Standby red / Auto green / Wind blue / Track orange).
         const modes: { val: number; label: string; color: string }[] = [
             { val: 0, label: 'Standby', color: '#d32f2f' },
@@ -560,7 +563,9 @@ export default function App(): React.JSX.Element {
         ...CHART_PRESETS.map(p => ({ id: p.id, label: p.tabLabel })),
     ];
 
-    const anchorSettings = {
+    const anchorSettings: AnchorPositionSettings = {
+        type: 'plugin',
+        id: 'aaa',
         size: '2x1' as const,
         name: 'Anchor',
         favorite: false,
@@ -571,10 +576,9 @@ export default function App(): React.JSX.Element {
         text: '',
         textActive: '',
         instance: DEFAULT_INSTANCE,
-        anchorLat: 43.144,
-        anchorLon: 16.268,
-        chainLength: 30,
-        depthAtDrop: 5,
+        anchorPosition: '0_userdata.0.anchor.position',
+        chainLength: '0_userdata.0.anchor.length',
+        depthAtDrop: '0_userdata.0.anchor.depthAtDrop',
         mapStyle: 'osm' as const,
     };
 

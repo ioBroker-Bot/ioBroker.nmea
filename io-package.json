@@ -239,7 +239,10 @@
         "pressureAlertMinutes": 240,
         "signalKEnabled": false,
         "signalKPort": 3000,
-        "signalKBidirectional": true
+        "signalKBidirectional": true,
+        "auxPosition": "",
+        "chainLength": "",
+        "notificationInstance": ""
     },
     "objects": [],
     "instanceObjects": [
@@ -311,6 +314,76 @@
                 "role": "state",
                 "read": false,
                 "write": true
+            },
+            "native": {}
+        },
+        {
+            "_id": "anchorAlarm",
+            "type": "channel",
+            "common": {
+                "expert": true,
+                "name": {
+                    "en": "Anchor alarm"
+                }
+            },
+            "native": {}
+        },
+        {
+            "_id": "anchorAlarm.isActive",
+            "type": "state",
+            "common": {
+                "name": {
+                    "en": "Is anchor alarm active"
+                },
+                "type": "boolean",
+                "role": "switch",
+                "read": true,
+                "write": true
+            },
+            "native": {}
+        },
+        {
+            "_id": "anchorAlarm.isAlarm",
+            "type": "state",
+            "common": {
+                "name": {
+                    "en": "Anchor alarm triggered"
+                },
+                "type": "boolean",
+                "role": "indicator.alarm",
+                "read": true,
+                "write": false
+            },
+            "native": {}
+        },
+        {
+            "_id": "anchorAlarm.alarmRadius",
+            "type": "state",
+            "common": {
+                "name": {
+                    "en": "Anchor alarm radius"
+                },
+                "unit": "m",
+                "type": "number",
+                "role": "state",
+                "read": true,
+                "write": true,
+                "def": 50
+            },
+            "native": {}
+        },
+        {
+            "_id": "anchorAlarm.anchorPosition",
+            "type": "state",
+            "common": {
+                "name": {
+                    "en": "Anchor position (lat;lon)"
+                },
+                "type": "string",
+                "role": "value.gps",
+                "read": true,
+                "write": true,
+                "def": 50
             },
             "native": {}
         }

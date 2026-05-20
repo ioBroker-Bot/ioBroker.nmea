@@ -1,5 +1,5 @@
 import { type AdapterOptions, Adapter, I18n } from '@iobroker/adapter-core';
-import { readFileSync, existsSync, appendFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { exec, type ExecException } from 'node:child_process';
 import { find } from 'geo-tz';
 import { FromPgn } from '@canboat/canboatjs';
@@ -30,6 +30,8 @@ import type { GenericDriver } from './lib/genericDriver';
 import { SignalKServer } from './lib/signalK';
 import { ENGINE_J1939_PGNS, processEngineJ1939 } from './lib/engineJ1939';
 import { AddressClaim } from './lib/addressClaim';
+import { AnchorAlarm } from './lib/anchorAlarm';
+import { AnchorTracker } from './lib/anchorTracker';
 
 const pgnPath = require.resolve('@canboat/ts-pgns').replace(/\\/g, '/').split('/');
 pgnPath.pop();
@@ -135,6 +137,10 @@ export class NmeaAdapter extends Adapter {
     private signalKServer: SignalKServer | null = null;
 
     private addressClaim: AddressClaim | null = null;
+
+    private anchorAlarm: AnchorAlarm | null = null;
+
+    private anchorTracker: AnchorTracker | null = null;
 
     private windSpeeds: { tws: number; ts: number }[] | null = null;
 
@@ -636,6 +642,56 @@ export class NmeaAdapter extends Adapter {
         }
 
         await this.writeState(id, val);
+
+        // Feed the anchor-alarm watcher with every fresh fix. The watcher itself decides whether
+        // to use this stream or an external aux-position state (see AnchorAlarm.onNmeaPosition).
+        if (typeof fields.latitude === 'number' && typeof fields.longitude === 'number') {
+            this.anchorAlarm?.onNmeaPosition(fields.latitude, fields.longitude);
+            this.anchorTracker?.onNmeaPosition(fields.latitude, fields.longitude);
+        }
+    }
+
+    /**
+     * PGN 128267 (Water Depth) carries `depth` (transducer reading) and `offset` (transducer-to-
+     * waterline/keel correction). Publishes the corrected value as `waterDepth.waterDepthTrue`
+     * so downstream consumers don't have to recompute it. The clamp at 0 is for the keel-offset
+     * case (negative offset + shallow water can mathematically go below zero).
+     */
+    async processDepthEvent(data: PGN): Promise<void> {
+        const channelId = this.pgn2entry[data.pgn]?.Id;
+        if (!channelId) {
+            return;
+        }
+        const fields: Record<string, any> = data.fields;
+        const depth = Number(fields.depth);
+        if (!isFinite(depth)) {
+            return;
+        }
+        const offset = Number(fields.offset);
+        const corrected = Math.max(0, depth + (isFinite(offset) ? offset : 0));
+        const id = `${channelId}.waterDepthTrue`;
+        if (!this.createsChannelAndStates[id]) {
+            this.createsChannelAndStates[id] = true;
+            const stateObject: ioBroker.StateObject = {
+                _id: id,
+                common: {
+                    name: 'Corrected water depth (depth + offset)',
+                    type: 'number',
+                    role: 'value.depth',
+                    unit: 'm',
+                    read: true,
+                    write: false,
+                },
+                type: 'state',
+                native: {},
+            };
+            await this.setObjectNotExistsAsync(id, stateObject);
+        }
+        await this.writeState(id, corrected);
+
+        // Anchor tracker uses the corrected depth (not the raw transducer value) to decide
+        // when the chain length matches the water depth (anchor on bottom).
+        this.anchorTracker?.onNmeaDepth(corrected);
     }
 
     setSystemTimeZone(zone: string): void {
@@ -843,7 +899,7 @@ export class NmeaAdapter extends Adapter {
                         const maxTs = moment(new Date(max.ts));
                         const tsDiff = minTs.from(maxTs);
 
-                        const alertText = I18n.t(`Pressure is falling by %s mbar in %s`, diff, tsDiff);
+                        const alertText = I18n.t('pressureAlarm', diff, tsDiff);
                         if (this.pressureAlerts[pressureId] !== alertText) {
                             if (!this.pressureAlerts[pressureId]) {
                                 await this.setState(pressureAlertId, true, true);
@@ -1091,6 +1147,16 @@ export class NmeaAdapter extends Adapter {
                     await this.processTemperatureEvent(data);
                 } else if (fields.actualTemperature && fields.source) {
                     await this.processActualTemperatureEvent(data);
+                } else if (typeof fields.depth === 'number') {
+                    // PGN 128267 (Water Depth) — derive `waterDepthTrue = depth + offset`.
+                    await this.processDepthEvent(data);
+                }
+
+                // SOG fan-out runs outside the else-if chain because it can appear in several
+                // PGNs (129026 rapid update, 129025 position rapid, plus AIS PGNs which already
+                // returned above). canboatjs delivers it in m/s; the tracker converts internally.
+                if (!fields.userId && typeof fields.sog === 'number') {
+                    this.anchorTracker?.onNmeaSog(fields.sog);
                 }
             }
         }
@@ -1158,6 +1224,18 @@ export class NmeaAdapter extends Adapter {
         }
         this.nmeaDriver?.start();
 
+        // Anchor-alarm watcher — creates `anchorAlarm.*` states (isActive/isAlarm/alarmRadius/
+        // anchorPosition), subscribes to the operator-writable ones, and starts evaluating
+        // every position fix coming through processPositionEvent (or via config.auxPosition).
+        this.anchorAlarm = new AnchorAlarm(this, this.config, I18n);
+        await this.anchorAlarm.start();
+
+        // Anchor-drop tracker — watches `config.chainLength`, `waterDepth.depth`, and the live
+        // GNSS position. Records the drop position when the chain starts paying out and a
+        // second "bottom reached" position when chain length ≈ depth.
+        this.anchorTracker = new AnchorTracker(this, this.config, I18n);
+        await this.anchorTracker.start();
+
         // Optional NMEA-2000 device announcement. Some autopilots silently drop group-function
         // commands from unknown source addresses; broadcasting an Address Claim + Product Info
         // (and optionally a Raymarine-style Device Identification) gets us into the device list
@@ -1166,15 +1244,11 @@ export class NmeaAdapter extends Adapter {
             const cfgSrc = parseInt(this.config.announceSrc as unknown as string, 10);
             this.addressClaim = new AddressClaim(this, this.nmeaDriver, {
                 src: isFinite(cfgSrc) && cfgSrc > 0 && cfgSrc < 252 ? cfgSrc : 7,
-                uniqueNumber:
-                    parseInt(this.config.announceUniqueNumber as unknown as string, 10) || 12345,
-                manufacturerCode:
-                    parseInt(this.config.announceManufacturerCode as unknown as string, 10) || 2046,
-                productCode:
-                    parseInt(this.config.announceProductCode as unknown as string, 10) || 0xc001,
+                uniqueNumber: parseInt(this.config.announceUniqueNumber as unknown as string, 10) || 12345,
+                manufacturerCode: parseInt(this.config.announceManufacturerCode as unknown as string, 10) || 2046,
+                productCode: parseInt(this.config.announceProductCode as unknown as string, 10) || 0xc001,
                 modelId: this.config.announceModelId || 'ioBroker.nmea',
-                raymarineDeviceId:
-                    parseInt(this.config.announceRaymarineDeviceId as unknown as string, 10) || 0,
+                raymarineDeviceId: parseInt(this.config.announceRaymarineDeviceId as unknown as string, 10) || 0,
             });
             this.addressClaim.start();
         }
@@ -1497,6 +1571,8 @@ export class NmeaAdapter extends Adapter {
             }
         }
         this.autoPilot?.onStateChange(id, state);
+        await this.anchorAlarm?.onStateChange(id, state);
+        await this.anchorTracker?.onStateChange(id, state);
     }
 
     onMessage(obj: ioBroker.Message): void {
@@ -1645,6 +1721,9 @@ export class NmeaAdapter extends Adapter {
             this.signalKServer = null;
             this.addressClaim?.stop();
             this.addressClaim = null;
+            this.anchorAlarm = null;
+            this.anchorTracker?.stop();
+            this.anchorTracker = null;
             this.nmeaDriver?.stop();
             callback();
         } catch {
