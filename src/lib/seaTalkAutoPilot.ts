@@ -205,7 +205,7 @@ export default class SeaTalkAutoPilot extends AutoPilot {
                     const deg = ((((state.val * 180) / Math.PI) % 360) + 360) % 360;
                     const rounded = Math.round(deg * 10) / 10;
                     if (this.currentWindAngle !== rounded) {
-                        this.adapter.log.info(
+                        this.adapter.log.debug(
                             `[autoPilot.windAngle ← bus] datum=${state.val.toFixed(4)} rad → ${rounded}° (was ${this.currentWindAngle ?? 'null'})`,
                         );
                         this.currentWindAngle = rounded;
@@ -341,7 +341,7 @@ export default class SeaTalkAutoPilot extends AutoPilot {
         // Make every autopilot frame sent to the bus visible in the default-level log so the
         // operator can confirm the Command Panel button actually reached the gateway and inspect
         // the exact Actisense frame that was emitted (PGN, source/destination, payload bytes).
-        this.adapter.log.info(`[autoPilot → 0x${this.autoPilotAddress.toString(16)}] ${label}: ${data.trim()}`);
+        this.adapter.log.debug(`[autoPilot → 0x${this.autoPilotAddress.toString(16)}] ${label}: ${data.trim()}`);
         this.nmeaDriver.write(data);
     }
 
@@ -547,12 +547,12 @@ export default class SeaTalkAutoPilot extends AutoPilot {
         // bytes makes any divergence between the two trivial to spot when comparing logs.
         const cached = this.values['seatalkPilotWindDatum.windDatum']?.val;
         const cachedDeg = typeof cached === 'number' ? ((((cached * 180) / Math.PI) % 360) + 360) % 360 : null;
-        this.adapter.log.info(
+        this.adapter.log.debug(
             `[setWindAngleAbsolute] target=${angleDeg.toFixed(2)}° (${rad.toFixed(4)} rad, encoded=${encoded} → 0x${lo
                 .toString(16)
                 .padStart(2, '0')} 0x${hi
                 .toString(16)
-                .padStart(2, '0')}); previous datum=${cachedDeg !== null ? cachedDeg.toFixed(2) + '°' : 'unknown'}`,
+                .padStart(2, '0')}); previous datum=${cachedDeg !== null ? `${cachedDeg.toFixed(2)}°` : 'unknown'}`,
         );
 
         const data = encodeActisense({

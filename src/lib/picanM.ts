@@ -58,11 +58,6 @@ export default class PicanM extends GenericDriver {
 
             transform(chunk, encoding, callback) {
                 const line = chunk.toString();
-                // Pre-parser raw sniff — see ngt1.ts for the rationale. Same Actisense plaintext
-                // format, so the same matcher applies.
-                if (isActisenseAutopilotLine(line)) {
-                    adapter.log.info(`[PICAN RAW autoPilot] ${line.trim()}`);
-                }
                 try {
                     const json = parser.parseString(line);
                     if (json?.fields) {
