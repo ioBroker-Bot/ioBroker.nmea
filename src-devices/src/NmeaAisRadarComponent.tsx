@@ -225,6 +225,12 @@ function formatLastSeen(ts: number, now: number): string {
     }
 }
 
+/** Format a number with fixed decimals, honouring the system's decimal separator (comma vs dot). */
+function formatNum(val: number, decimals: number, isFloatComma?: boolean): string {
+    const s = val.toFixed(decimals);
+    return isFloatComma ? s.replace('.', ',') : s;
+}
+
 /**
  * Equirectangular projection: project (lat, lon) relative to (refLat, refLon) into local
  * meters east / north. The cosine factor keeps the eastward distance correct as you move away
@@ -873,10 +879,14 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
         const vectorMin = this.props.settings.vectorMinutes ?? DEFAULT_VECTOR_MINUTES;
         const staleMs = (this.props.settings.staleMinutes ?? DEFAULT_STALE_MINUTES) * 60_000;
         const now = Date.now();
+        const isFloatComma = this.props.stateContext.isFloatComma;
         const upRotation = courseUp && ownHeading != null ? -ownHeading : 0;
 
         // Concentric rings + cardinal labels.
-        const rings = RING_FRACTIONS.map(f => ({ r: R_OUTER * f, label: (rangeNm * f).toFixed(f === 1 ? 0 : 1) }));
+        const rings = RING_FRACTIONS.map(f => ({
+            r: R_OUTER * f,
+            label: formatNum(rangeNm * f, f === 1 ? 0 : 1, isFloatComma),
+        }));
 
         // Own MMSI to suppress — empty string / whitespace = no filter. Stored as a normalised
         //  string, so a numeric vs string MMSI doesn't trip the comparison.
@@ -1078,7 +1088,7 @@ export class NmeaAisRadarComponent extends WidgetGeneric<AisRadarComponentState,
                             hoverLines.push(`COG ${Math.round(t.cog)}°`);
                         }
                         if (t.sog > 0.1) {
-                            hoverLines.push(`SOG ${t.sog.toFixed(1)} kn`);
+                            hoverLines.push(`SOG ${formatNum(t.sog, 1, isFloatComma)} kn`);
                         }
                         // "last seen" — relative for fresh updates, absolute clock time for older
                         // ones. Computed at render time, so the value is current to within the

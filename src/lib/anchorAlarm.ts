@@ -354,7 +354,7 @@ export class AnchorAlarm {
     /**
      * Push the alarm event to the configured notification instance (telegram / pushover etc.).
      * Sends a plain string — both supported adapters accept that; richer payloads (titles,
-     * priorities) would need per-adapter shaping which isn't worth the complexity here.
+     * priorities) would need per-adapter shaping, which isn't worth the complexity here.
      * Silent no-op when no instance is configured.
      */
     private async sendNotification(): Promise<void> {

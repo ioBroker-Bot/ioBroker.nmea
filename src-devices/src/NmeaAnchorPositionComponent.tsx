@@ -156,6 +156,12 @@ function parseLatLonString(val: unknown): { lat: number; lon: number } | null {
 }
 
 /** Great-circle distance via haversine, returning metres. */
+/** Format a number with fixed decimals, honouring the system's decimal separator (comma vs dot). */
+function formatNum(val: number, decimals: number, isFloatComma?: boolean): string {
+    const s = val.toFixed(decimals);
+    return isFloatComma ? s.replace('.', ',') : s;
+}
+
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const dLat = (lat2 - lat1) * RAD;
     const dLon = (lon2 - lon1) * RAD;
@@ -998,6 +1004,7 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
     private renderReadouts(compact: boolean): React.JSX.Element {
         const distance = this.currentDistanceM();
         const { currentDepth, chainLength, depthAtDrop } = this.state;
+        const isFloatComma = this.props.stateContext.isFloatComma;
         const distanceText = distance != null ? `${Math.round(distance)} m` : '—';
         const distanceHi =
             chainLength != null && distance != null && distance > effectiveSwingRadius(chainLength, depthAtDrop);
@@ -1061,13 +1068,13 @@ export class NmeaAnchorPositionComponent extends WidgetGeneric<AnchorPositionSta
                         {depthAtDrop != null ? (
                             <span>
                                 @drop&nbsp;
-                                <strong>{depthAtDrop.toFixed(1)} m</strong>
+                                <strong>{formatNum(depthAtDrop, 1, isFloatComma)} m</strong>
                             </span>
                         ) : null}
                         {currentDepth != null ? (
                             <span>
                                 depth&nbsp;
-                                <strong>{currentDepth.toFixed(1)} m</strong>
+                                <strong>{formatNum(currentDepth, 1, isFloatComma)} m</strong>
                             </span>
                         ) : null}
                     </Box>

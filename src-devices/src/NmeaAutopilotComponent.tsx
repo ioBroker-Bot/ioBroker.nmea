@@ -1009,7 +1009,14 @@ export class NmeaAutopilotComponent extends WidgetGeneric<AutopilotComponentStat
             { delta: 1, label: '+1' },
             { delta: 10, label: '+10' },
         ];
-        const fmtKn = (v: number | null): string => (v != null && isFinite(v) ? v.toFixed(1) : '—');
+        const isFloatComma = this.props.stateContext.isFloatComma;
+        const fmtKn = (v: number | null): string => {
+            if (v == null || !isFinite(v)) {
+                return '—';
+            }
+            const s = v.toFixed(1);
+            return isFloatComma ? s.replace('.', ',') : s;
+        };
         return (
             <Box
                 sx={{
